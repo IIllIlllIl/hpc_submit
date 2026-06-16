@@ -1,0 +1,16 @@
+host: access-iris.uni.lu
+port: 8022
+user: YOUR_USERNAME
+remote_project_dir: ~/hpc_runs/{project_name}
+default_partition: batch
+default_time: "01:00:00"
+conda_module: miniconda3
+python_module: lang/Python/3.11
+sync_excludes:
+  - ".git"
+  - "__pycache__"
+  - "*.pyc"
+  - ".env"
+  - "node_modules"
+  - ".ulhpc_submit"
+  - "Dockerfile"
