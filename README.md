@@ -17,7 +17,15 @@ ulhpc-submit --partition gpu --gpus 1 --time 02:00:00 train.py
 
 ## Configuration
 
-Create `~/.config/ulhpc-submit/config.yaml`:
+The easiest way to create the config file is to run the interactive setup:
+
+```bash
+ulhpc-submit --init-config
+```
+
+This writes `~/.config/ulhpc-submit/config.yaml` with restricted permissions (`600`).
+
+Alternatively, create the file manually:
 
 ```yaml
 host: access-iris.uni.lu
@@ -33,6 +41,23 @@ sync_excludes:
 ```
 
 The config file is automatically restricted to owner-only access (`600`) because it may contain SSH credentials.
+
+Configuration values are resolved in this order:
+
+1. CLI options (highest priority)
+2. `ULHPC_*` environment variables, e.g. `ULHPC_USER`, `ULHPC_HOST`, `ULHPC_PORT`, `ULHPC_SSH_KEY`
+3. Config file values
+4. Built-in defaults
+
+Use `--show-config` to inspect the merged configuration:
+
+```bash
+ulhpc-submit --show-config
+```
+
+### Need help?
+
+If you have questions about UL HPC, you can log in with your UL account to the [UL HPC GPT assistant](https://webapp-unilux-unigpt-prd-we.azurewebsites.net/) and ask HPC-related questions.
 
 ## Common submission modes
 
@@ -79,6 +104,17 @@ ulhpc-submit --dry-run python main.py
 After submission, `ulhpc-submit` polls the job state. If the job remains `PENDING` for several minutes, it prints periodic hints to the CLI. When the job finishes, remote `job_%j.out` and `job_%j.err` are merged into a local run log under `~/.local/share/ulhpc-submit/runs/`.
 
 Use `--full-logs` to download the complete remote output files instead of tailing the last 500 lines.
+
+## Platform Support
+
+`ulhpc-submit` is designed to submit jobs to the UL HPC **Iris** Slurm cluster, which is a Linux environment. The local machine must be able to run `ssh` and `rsync`.
+
+| Platform | Support | Notes |
+|---|---|---|
+| Linux | Native | Primary target. All required tools are available. |
+| macOS | Native | `ssh` and `rsync` are pre-installed. |
+| Windows (WSL2) | Recommended | Run `ulhpc-submit` inside WSL2 to get the full Unix toolchain (`bash`, `rsync`, `ssh`, Slurm client). |
+| Windows (native) | Limited | Native Windows does not include `rsync`, and generated job scripts assume `bash`. Use WSL2 instead. |
 
 ## Testing
 

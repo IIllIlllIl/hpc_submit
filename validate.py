@@ -13,7 +13,12 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+# Allow running validate.py directly without installing the package.
+repo_root = Path(__file__).resolve().parent
+sys.path.insert(0, str(repo_root / "src"))
+
 # Import module under test
+from ulhpc_submit.cli import main as cli_main
 from ulhpc_submit.config import Config
 from ulhpc_submit.main import submit_hpc_task
 
@@ -155,7 +160,6 @@ def run_scenario(name: str, description: str, runner: Callable[[], bool]) -> Tup
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parent
     report_lines: List[str] = [
         "# UL HPC Submit Validation Report\n",
         f"Date: {__import__('datetime').datetime.now().isoformat()}\n",
@@ -410,6 +414,50 @@ def main() -> int:
             return rc == 1 and "HPC_RESOURCE_ERROR" in read_logs(tmp_path / "logs")
 
     scenarios.append(("oom-kill", "Classify OUT_OF_MEMORY as HPC_RESOURCE_ERROR.", oom_kill))
+
+    # Scenario: config validation failure
+    def config_validation_failure() -> bool:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            project = tmp_path / "proj"
+            project.mkdir()
+            (project / "main.py").write_text("print('hi')\n", encoding="utf-8")
+
+            import io
+            from contextlib import redirect_stderr
+
+            stderr_buf = io.StringIO()
+            with redirect_stderr(stderr_buf):
+                rc = cli_main([
+                    "--local-dir", str(project),
+                    "--user", "your_username",
+                    "python", "main.py",
+                ])
+            stderr_text = stderr_buf.getvalue()
+            return rc == 2 and "CONFIG_ERROR" in stderr_text and "--init-config" in stderr_text
+
+    scenarios.append(("config-validation-failure", "Reject placeholder user with CONFIG_ERROR.", config_validation_failure))
+
+    # Scenario: show-config
+    def show_config() -> bool:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.yaml"
+            config_path.write_text("user: validateuser\nhost: validatehost\n", encoding="utf-8")
+
+            import io
+            from contextlib import redirect_stdout
+
+            stdout_buf = io.StringIO()
+            with redirect_stdout(stdout_buf):
+                rc = cli_main([
+                    "--config", str(config_path),
+                    "--show-config",
+                ])
+            stdout_text = stdout_buf.getvalue()
+            return rc == 0 and "validateuser" in stdout_text and "validatehost" in stdout_text
+
+    scenarios.append(("show-config", "Print merged configuration with --show-config.", show_config))
 
     results: List[Tuple[str, str, bool]] = []
     report_lines.append("## Scenarios\n")

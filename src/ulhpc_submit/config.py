@@ -1,16 +1,21 @@
 """Configuration loading and merging.
 
-Supports a user YAML file at ~/.config/ulhpc-submit/config.yaml and CLI
-overrides. CLI values take precedence over config file values, which take
-precedence over defaults.
+Supports a user YAML file at ~/.config/ulhpc-submit/config.yaml, environment
+variables (ULHPC_*), and CLI overrides. CLI values take precedence over
+environment variables, which take precedence over config file values, which
+take precedence over defaults.
 """
 
+import getpass
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+
+from .errors import ConfigError
 
 
 DEFAULTS: Dict[str, Any] = {
@@ -80,6 +85,51 @@ def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, An
     return result
 
 
+ENV_VAR_MAP: Dict[str, str] = {
+    "host": "ULHPC_HOST",
+    "port": "ULHPC_PORT",
+    "user": "ULHPC_USER",
+    "remote_project_dir": "ULHPC_REMOTE_PROJECT_DIR",
+    "default_partition": "ULHPC_DEFAULT_PARTITION",
+    "default_nodes": "ULHPC_DEFAULT_NODES",
+    "default_ntasks": "ULHPC_DEFAULT_NTASKS",
+    "default_cpus_per_task": "ULHPC_DEFAULT_CPUS_PER_TASK",
+    "default_mem": "ULHPC_DEFAULT_MEM",
+    "default_time": "ULHPC_DEFAULT_TIME",
+    "conda_module": "ULHPC_CONDA_MODULE",
+    "python_module": "ULHPC_PYTHON_MODULE",
+    "container_module": "ULHPC_CONTAINER_MODULE",
+    "poll_interval": "ULHPC_POLL_INTERVAL",
+    "pending_timeout": "ULHPC_PENDING_TIMEOUT",
+    "log_dir": "ULHPC_LOG_DIR",
+    "ssh_key": "ULHPC_SSH_KEY",
+    "ssh_key_passphrase": "ULHPC_SSH_KEY_PASSPHRASE",
+}
+
+
+def load_env_overrides() -> Dict[str, Any]:
+    """Read ULHPC_* environment variables and return typed overrides."""
+    overrides: Dict[str, Any] = {}
+    for cfg_name, env_name in ENV_VAR_MAP.items():
+        value = os.environ.get(env_name)
+        if value is None:
+            continue
+        if cfg_name in {
+            "port",
+            "default_nodes",
+            "default_ntasks",
+            "default_cpus_per_task",
+            "poll_interval",
+            "pending_timeout",
+        }:
+            try:
+                value = int(value)
+            except ValueError:
+                continue
+        overrides[cfg_name] = value
+    return overrides
+
+
 def _config_file_path() -> Path:
     """Standard config location."""
     return Path.home() / ".config" / "ulhpc-submit" / "config.yaml"
@@ -103,8 +153,79 @@ def _ensure_config_permissions(path: Path) -> None:
             pass
 
 
-def load_config(path: Optional[Path] = None) -> Config:
-    """Load configuration from file, falling back to defaults."""
+def validate_config(config: Config) -> None:
+    """Validate required configuration fields before connecting to HPC.
+
+    Raises:
+        ConfigError: if a required field is missing or still a placeholder.
+    """
+    if not config.host:
+        raise ConfigError(
+            "Missing required config value: host.",
+            suggestion="Set 'host' via --host, ULHPC_HOST env var, or run 'ulhpc-submit --init-config'.",
+        )
+    if not config.user or config.user == "your_username":
+        raise ConfigError(
+            "Missing or placeholder config value: user.",
+            suggestion="Set 'user' via --user, ULHPC_USER env var, or run 'ulhpc-submit --init-config'.",
+        )
+
+
+def _prompt(default: str, prompt_text: str) -> str:
+    """Prompt the user with a default value."""
+    value = input(f"{prompt_text} [{default}]: ").strip()
+    return value if value else default
+
+
+def init_config_interactive(path: Optional[Path] = None) -> Path:
+    """Interactively create a config file at the standard location.
+
+    Returns:
+        Path to the written config file.
+    """
+    cfg_path = path or _config_file_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+
+    default_user = getpass.getuser()
+    default_host = DEFAULTS["host"]
+    default_port = str(DEFAULTS["port"])
+    default_partition = DEFAULTS["default_partition"]
+    default_time = DEFAULTS["default_time"]
+
+    print(f"Creating config file: {cfg_path}")
+    user = _prompt(default_user, "UL HPC username")
+    host = _prompt(default_host, "Iris access host")
+    port = int(_prompt(default_port, "SSH port"))
+    ssh_key = _prompt("", "Path to SSH private key (optional, leave empty for ssh-agent)")
+    partition = _prompt(default_partition, "Default Slurm partition")
+    time = _prompt(default_time, "Default wallclock time")
+
+    data = {
+        "user": user,
+        "host": host,
+        "port": port,
+        "default_partition": partition,
+        "default_time": time,
+    }
+    if ssh_key:
+        data["ssh_key"] = os.path.expanduser(ssh_key)
+
+    with cfg_path.open("w", encoding="utf-8") as fh:
+        yaml.safe_dump(data, fh, sort_keys=False, default_flow_style=False)
+
+    _ensure_config_permissions(cfg_path)
+    print(f"Config written to {cfg_path} with restricted permissions.")
+    return cfg_path
+
+
+def load_config(path: Optional[Path] = None, warn_missing: bool = False) -> Config:
+    """Load configuration from file, falling back to defaults.
+
+    Args:
+        path: Config file path. Defaults to ~/.config/ulhpc-submit/config.yaml.
+        warn_missing: If True, print a first-run hint to stderr when the file
+            does not exist.
+    """
     cfg_path = path or _config_file_path()
     _ensure_config_permissions(cfg_path)
     data: Dict[str, Any] = {}
@@ -113,15 +234,22 @@ def load_config(path: Optional[Path] = None) -> Config:
             loaded = yaml.safe_load(fh)
             if isinstance(loaded, dict):
                 data = loaded
+    elif warn_missing:
+        print(
+            f"[ulhpc-submit] No config file found at {cfg_path}. "
+            "Run 'ulhpc-submit --init-config' to create one.",
+            file=sys.stderr,
+        )
     merged = _merge_dicts(DEFAULTS, data)
     return Config(**merged)
 
 
-def build_config_from_args(args: Any) -> Config:
-    """Merge config file with argparse namespace overrides."""
-    file_cfg = load_config(getattr(args, "config", None))
+def build_config_from_args(args: Any, warn_missing: bool = False) -> Config:
+    """Merge config file, environment variables, and argparse overrides."""
+    file_cfg = load_config(getattr(args, "config", None), warn_missing=warn_missing)
 
-    overrides: Dict[str, Any] = {}
+    env_overrides = load_env_overrides()
+    cli_overrides: Dict[str, Any] = {}
     arg_map = {
         "host": "host",
         "port": "port",
@@ -142,7 +270,8 @@ def build_config_from_args(args: Any) -> Config:
     for arg_name, cfg_name in arg_map.items():
         value = getattr(args, arg_name, None)
         if value is not None:
-            overrides[cfg_name] = value
+            cli_overrides[cfg_name] = value
 
-    merged = _merge_dicts(file_cfg.__dict__, overrides)
+    merged = _merge_dicts(file_cfg.__dict__, env_overrides)
+    merged = _merge_dicts(merged, cli_overrides)
     return Config(**merged)

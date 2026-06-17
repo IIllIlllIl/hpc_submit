@@ -24,6 +24,18 @@ class ULHPCError(Exception):
         return f"[{self.code}] {self.message}\nSuggestion: {self.suggestion}"
 
 
+# ---------- Config errors ----------
+
+class ConfigError(ULHPCError):
+    code = "CONFIG_ERROR"
+    suggestion = "Run 'ulhpc-submit --init-config' to create a configuration file, or edit ~/.config/ulhpc-submit/config.yaml."
+
+
+class ConfigMissingError(ConfigError):
+    code = "CONFIG_MISSING"
+    suggestion = "No config file found. Run 'ulhpc-submit --init-config' to create one."
+
+
 # ---------- Sync errors ----------
 
 class SyncError(ULHPCError):
