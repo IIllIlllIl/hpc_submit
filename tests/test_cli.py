@@ -4,6 +4,7 @@ import pytest
 
 from ulhpc_submit import __version__
 from ulhpc_submit.cli import main, parse_args
+from ulhpc_submit.errors import SyncNetworkError
 
 
 def test_parse_args_basic():
@@ -113,18 +114,116 @@ def test_cli_rejects_placeholder_user(capsys, monkeypatch, tmp_path):
     assert "--init-config" in captured.err
 
 
-def test_cli_warns_on_missing_config(capsys, monkeypatch, tmp_path):
-    # Provide a valid user via CLI so validation passes; only check the warning.
+def test_parse_args_allows_test_connection_without_command():
+    args = parse_args(["--test-connection"])
+    assert args.test_connection is True
+    assert args.command == []
+
+
+def test_cli_test_connection_success(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    connect_calls = []
+    exec_calls = []
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def connect(self):
+            connect_calls.append(self.kwargs.get("max_retries"))
+
+        def exec_command(self, command):
+            exec_calls.append(command)
+            return 0, "", ""
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main(["--test-connection", "--user", "testuser"])
+    assert rc == 0
+    assert connect_calls == [1]
+    assert exec_calls == ["true"]
+    captured = capsys.readouterr()
+    assert "SSH connectivity test succeeded" in captured.out
+
+
+def test_cli_test_connection_failure(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
 
+    class FailingSSHClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            raise SyncNetworkError("forced failure")
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", FailingSSHClient)
+
+    rc = main(["--test-connection", "--user", "testuser"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "rate-limiting" in captured.err
+
+
+def test_cli_test_connection_forces_single_attempt_despite_config(monkeypatch, tmp_path, capsys):
+    """--test-connection must always try only once, even if config sets a higher value."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("user: testuser\nmax_ssh_retries: 5\n", encoding="utf-8")
+    connect_calls = []
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def connect(self):
+            connect_calls.append(self.kwargs.get("max_retries"))
+
+        def exec_command(self, command):
+            return 0, "", ""
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main(["--config", str(config_path), "--test-connection"])
+    assert rc == 0
+    assert connect_calls == [1]
+
+
+def test_cli_test_connection_validates_config(monkeypatch, tmp_path, capsys):
+    """Placeholder user should be rejected before any SSH attempt."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    rc = main(["--test-connection"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "CONFIG_ERROR" in captured.err
+
+
+def test_cli_max_ssh_retries_merged_into_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
     from ulhpc_submit import main as main_module
-    monkeypatch.setattr(main_module.SubmissionPipeline, "run", lambda self: 0)
+
+    calls = []
+
+    class SpyPipeline:
+        def __init__(self, config, **kwargs):
+            calls.append(config)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "SubmissionPipeline", SpyPipeline)
 
     rc = main([
         "--local-dir", str(tmp_path),
         "--user", "testuser",
+        "--max-ssh-retries", "3",
         "python", "main.py",
     ])
     assert rc == 0
-    captured = capsys.readouterr()
-    assert "No config file found" in captured.err
+    assert len(calls) == 1
+    assert calls[0].max_ssh_retries == 3

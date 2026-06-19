@@ -35,6 +35,7 @@ DEFAULTS: Dict[str, Any] = {
     "sync_excludes": [".git", "__pycache__", "*.pyc", ".env", "node_modules", ".ulhpc_submit", "Dockerfile"],
     "poll_interval": 10,
     "pending_timeout": 3600,
+    "max_ssh_retries": 1,
     "log_dir": "~/.local/share/ulhpc-submit/runs",
     "ssh_key": None,
     "ssh_key_passphrase": None,
@@ -59,6 +60,7 @@ class Config:
     sync_excludes: List[str] = field(default_factory=list)
     poll_interval: int = 10
     pending_timeout: int = 3600
+    max_ssh_retries: int = 1
     log_dir: str = "~/.local/share/ulhpc-submit/runs"
     ssh_key: Optional[str] = None
     ssh_key_passphrase: Optional[str] = None
@@ -101,6 +103,7 @@ ENV_VAR_MAP: Dict[str, str] = {
     "container_module": "ULHPC_CONTAINER_MODULE",
     "poll_interval": "ULHPC_POLL_INTERVAL",
     "pending_timeout": "ULHPC_PENDING_TIMEOUT",
+    "max_ssh_retries": "ULHPC_MAX_SSH_RETRIES",
     "log_dir": "ULHPC_LOG_DIR",
     "ssh_key": "ULHPC_SSH_KEY",
     "ssh_key_passphrase": "ULHPC_SSH_KEY_PASSPHRASE",
@@ -121,6 +124,7 @@ def load_env_overrides() -> Dict[str, Any]:
             "default_cpus_per_task",
             "poll_interval",
             "pending_timeout",
+            "max_ssh_retries",
         }:
             try:
                 value = int(value)
@@ -168,6 +172,11 @@ def validate_config(config: Config) -> None:
         raise ConfigError(
             "Missing or placeholder config value: user.",
             suggestion="Set 'user' via --user, ULHPC_USER env var, or run 'ulhpc-submit --init-config'.",
+        )
+    if not isinstance(config.max_ssh_retries, int) or config.max_ssh_retries < 1:
+        raise ConfigError(
+            "max_ssh_retries must be an integer >= 1.",
+            suggestion="Set --max-ssh-retries to a positive integer, e.g. 1 for fail-fast or 3 to tolerate transient issues.",
         )
 
 
@@ -265,6 +274,7 @@ def build_config_from_args(args: Any, warn_missing: bool = False) -> Config:
         "python_module": "python_module",
         "poll_interval": "poll_interval",
         "pending_timeout": "pending_timeout",
+        "max_ssh_retries": "max_ssh_retries",
         "ssh_key": "ssh_key",
     }
     for arg_name, cfg_name in arg_map.items():

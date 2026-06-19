@@ -16,8 +16,9 @@ from .config import (
     load_config,
     validate_config,
 )
-from .errors import ConfigError
+from .errors import ConfigError, SyncNetworkError
 from .main import submit_hpc_task
+from .ssh_client import SSHClient
 
 
 HELP_EPILOG = """
@@ -43,7 +44,7 @@ configuration:
 
   Common environment variables:
     ULHPC_USER, ULHPC_HOST, ULHPC_PORT, ULHPC_SSH_KEY,
-    ULHPC_DEFAULT_PARTITION, ULHPC_DEFAULT_TIME
+    ULHPC_MAX_SSH_RETRIES, ULHPC_DEFAULT_PARTITION, ULHPC_DEFAULT_TIME
 """
 
 
@@ -150,6 +151,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Print more detailed progress messages",
     )
+    parser.add_argument(
+        "--max-ssh-retries",
+        type=int,
+        help="Maximum SSH connection attempts (default: 1, fail-fast)",
+    )
+    parser.add_argument(
+        "--test-connection",
+        action="store_true",
+        help="Verify SSH connectivity to the access node once and exit",
+    )
     init_or_show = parser.add_mutually_exclusive_group()
     init_or_show.add_argument(
         "--init-config",
@@ -173,7 +184,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.command and args.command[0] == "--":
         args.command = args.command[1:]
-    if not args.command and not args.init_config and not args.show_config:
+    if not args.command and not args.init_config and not args.show_config and not args.test_connection:
         parser.error("Please provide a command to run, e.g. ulhpc-submit python main.py")
     return args
 
@@ -193,6 +204,34 @@ def main(argv: Optional[List[str]] = None) -> int:
         config = load_config(args.config)
         print(yaml.safe_dump(config.__dict__, sort_keys=False, default_flow_style=False).rstrip())
         return 0
+
+    if args.test_connection:
+        config = build_config_from_args(args, warn_missing=True)
+        try:
+            validate_config(config)
+        except ConfigError as exc:
+            print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+            return 2
+        try:
+            ssh = SSHClient(
+                host=config.host,
+                port=config.port,
+                user=config.user,
+                key_path=config.ssh_key,
+                key_passphrase=config.ssh_key_passphrase,
+                max_retries=1,
+            )
+            ssh.connect()
+            ssh.exec_command("true")
+            ssh.close()
+            print(
+                f"[ulhpc-submit] SSH connectivity test succeeded: "
+                f"{config.user}@{config.host}:{config.port}"
+            )
+            return 0
+        except SyncNetworkError as exc:
+            print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+            return 2
 
     config = build_config_from_args(args, warn_missing=True)
 

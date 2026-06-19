@@ -33,6 +33,7 @@ class DummyArgs:
     python_module = None
     poll_interval = None
     pending_timeout = None
+    max_ssh_retries = None
     ssh_key = None
 
 
@@ -135,6 +136,62 @@ def test_validate_config_rejects_missing_host():
     with pytest.raises(ConfigError) as exc_info:
         validate_config(cfg)
     assert "host" in str(exc_info.value)
+
+
+def test_default_max_ssh_retries_is_one():
+    assert DEFAULTS["max_ssh_retries"] == 1
+    cfg = Config(**DEFAULTS)
+    assert cfg.max_ssh_retries == 1
+
+
+def test_env_override_max_ssh_retries(monkeypatch):
+    monkeypatch.setenv("ULHPC_MAX_SSH_RETRIES", "3")
+    overrides = load_env_overrides()
+    assert overrides["max_ssh_retries"] == 3
+
+
+def test_cli_override_max_ssh_retries():
+    args = DummyArgs()
+    args.max_ssh_retries = 3
+    cfg = build_config_from_args(args)
+    assert cfg.max_ssh_retries == 3
+
+
+def test_cli_max_ssh_retries_precedence(tmp_path: Path, monkeypatch):
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump({"user": "fileuser", "max_ssh_retries": 5}), encoding="utf-8")
+    monkeypatch.setenv("ULHPC_MAX_SSH_RETRIES", "2")
+
+    args = DummyArgs()
+    args.config = path
+    cfg = build_config_from_args(args)
+    assert cfg.max_ssh_retries == 2  # env overrides file
+
+    args2 = DummyArgs()
+    args2.config = path
+    args2.max_ssh_retries = 3
+    cfg2 = build_config_from_args(args2)
+    assert cfg2.max_ssh_retries == 3  # CLI overrides env and file
+
+
+def test_validate_config_rejects_non_positive_max_ssh_retries():
+    data = dict(DEFAULTS)
+    data["user"] = "testuser"
+    data["max_ssh_retries"] = 0
+    cfg = Config(**data)
+    with pytest.raises(ConfigError) as exc_info:
+        validate_config(cfg)
+    assert "max_ssh_retries" in str(exc_info.value)
+
+
+def test_validate_config_rejects_string_max_ssh_retries():
+    data = dict(DEFAULTS)
+    data["user"] = "testuser"
+    data["max_ssh_retries"] = "abc"
+    cfg = Config(**data)
+    with pytest.raises(ConfigError) as exc_info:
+        validate_config(cfg)
+    assert "max_ssh_retries" in str(exc_info.value)
 
 
 def test_validate_config_accepts_valid_config():

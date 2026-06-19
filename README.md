@@ -116,6 +116,26 @@ Use `--full-logs` to download the complete remote output files instead of tailin
 | Windows (WSL2) | Recommended | Run `ulhpc-submit` inside WSL2 to get the full Unix toolchain (`bash`, `rsync`, `ssh`, Slurm client). |
 | Windows (native) | Limited | Native Windows does not include `rsync`, and generated job scripts assume `bash`. Use WSL2 instead. |
 
+## Troubleshooting
+
+### Avoiding rate-limiting on repeated failed connections
+
+When you are on the UL campus network or VPN, rapid failed SSH attempts from the same egress IP can trigger a temporary block on `access-iris.uni.lu:8022`. `ulhpc-submit` therefore defaults to **fail-fast**:
+
+- The default `--max-ssh-retries` is **1**: the first connection failure stops immediately, minimizing the risk of being rate-limited.
+- If your network is occasionally flaky and you want the tool to tolerate transient issues, explicitly enable retries:
+  ```bash
+  ulhpc-submit --max-ssh-retries 3 python main.py
+  # or
+  ULHPC_MAX_SSH_RETRIES=3 ulhpc-submit python main.py
+  ```
+- Before submitting, you can verify reachability with a single SSH attempt:
+  ```bash
+  ulhpc-submit --test-connection
+  ```
+  This performs a real SSH login to the access node but tries only once.
+- If you see `SYNC_NETWORK_ERROR`, **stop retrying immediately**, check your VPN/SSH setup, wait before trying again, and use `--test-connection` to confirm connectivity before a full submission.
+
 ## Testing
 
 ```bash

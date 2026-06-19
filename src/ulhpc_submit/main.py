@@ -75,6 +75,7 @@ class SubmissionPipeline:
             user=self.config.user,
             key_path=self.config.ssh_key,
             key_passphrase=self.config.ssh_key_passphrase,
+            max_retries=self.config.max_ssh_retries,
         )
         ssh.connect()
         return ssh

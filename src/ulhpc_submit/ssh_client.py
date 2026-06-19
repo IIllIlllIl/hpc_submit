@@ -5,6 +5,7 @@ thin; module/conda setup is not executed here (it runs inside the Slurm job).
 """
 
 import os
+import random
 import shlex
 import time
 from typing import Optional, Tuple
@@ -24,7 +25,7 @@ class SSHClient:
         user: str,
         key_path: Optional[str] = None,
         key_passphrase: Optional[str] = None,
-        max_retries: int = 5,
+        max_retries: int = 1,
     ):
         self.host = host
         self.port = port
@@ -54,7 +55,7 @@ class SSHClient:
         return client
 
     def connect(self) -> paramiko.SSHClient:
-        """Connect with exponential backoff."""
+        """Connect with exponential backoff and jitter."""
         last_exc: Optional[Exception] = None
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -63,7 +64,8 @@ class SSHClient:
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 if attempt < self.max_retries:
-                    time.sleep(2 ** attempt)
+                    sleep_seconds = min(2 ** attempt, 30) + random.uniform(0, 1)
+                    time.sleep(sleep_seconds)
         raise SyncNetworkError(
             f"Could not SSH to {self.user}@{self.host}:{self.port} after {self.max_retries} attempts: {last_exc}",
         )

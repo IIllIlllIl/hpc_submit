@@ -45,7 +45,13 @@ class SyncError(ULHPCError):
 
 class SyncNetworkError(SyncError):
     code = "SYNC_NETWORK_ERROR"
-    suggestion = "Network failure during sync. Verify VPN/campus network and SSH connectivity to access-iris.uni.lu:8022."
+    suggestion = (
+        "Network or SSH failure. Repeated failed attempts from the same IP "
+        "can trigger temporary rate-limiting on access-iris.uni.lu:8022. "
+        "Stop retrying immediately, verify your VPN/campus network and SSH connectivity, "
+        "wait before retrying, then try again. Use --test-connection to verify connectivity "
+        "before a full submission. To tolerate transient network issues, set --max-ssh-retries N."
+    )
 
 
 class SyncPermissionError(SyncError):
