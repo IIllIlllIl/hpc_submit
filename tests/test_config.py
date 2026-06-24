@@ -35,6 +35,7 @@ class DummyArgs:
     pending_timeout = None
     max_ssh_retries = None
     ssh_key = None
+    sync_free_space_margin = None
 
 
 def test_load_default_config(tmp_path: Path):
@@ -144,7 +145,32 @@ def test_default_max_ssh_retries_is_one():
     assert cfg.max_ssh_retries == 1
 
 
-def test_env_override_max_ssh_retries(monkeypatch):
+def test_default_sync_free_space_margin():
+    assert DEFAULTS["sync_free_space_margin"] == 1.1
+    cfg = Config(**DEFAULTS)
+    assert cfg.sync_free_space_margin == 1.1
+
+
+def test_env_override_sync_free_space_margin(monkeypatch):
+    monkeypatch.setenv("ULHPC_SYNC_FREE_SPACE_MARGIN", "2.5")
+    overrides = load_env_overrides()
+    assert overrides["sync_free_space_margin"] == 2.5
+
+
+def test_cli_override_sync_free_space_margin():
+    args = DummyArgs()
+    args.sync_free_space_margin = 2.0
+    cfg = build_config_from_args(args)
+    assert cfg.sync_free_space_margin == 2.0
+
+
+def test_env_override_sync_free_space_margin_invalid_ignored(monkeypatch):
+    monkeypatch.setenv("ULHPC_SYNC_FREE_SPACE_MARGIN", "not-a-number")
+    overrides = load_env_overrides()
+    assert "sync_free_space_margin" not in overrides
+
+
+
     monkeypatch.setenv("ULHPC_MAX_SSH_RETRIES", "3")
     overrides = load_env_overrides()
     assert overrides["max_ssh_retries"] == 3

@@ -227,3 +227,29 @@ def test_cli_max_ssh_retries_merged_into_config(monkeypatch, tmp_path):
     assert rc == 0
     assert len(calls) == 1
     assert calls[0].max_ssh_retries == 3
+
+
+def test_cli_sync_free_space_margin_merged_into_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from ulhpc_submit import main as main_module
+
+    calls = []
+
+    class SpyPipeline:
+        def __init__(self, config, **kwargs):
+            calls.append(config)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "SubmissionPipeline", SpyPipeline)
+
+    rc = main([
+        "--local-dir", str(tmp_path),
+        "--user", "testuser",
+        "--sync-free-space-margin", "2.0",
+        "python", "main.py",
+    ])
+    assert rc == 0
+    assert len(calls) == 1
+    assert calls[0].sync_free_space_margin == 2.0

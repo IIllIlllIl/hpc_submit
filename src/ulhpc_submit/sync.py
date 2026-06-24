@@ -16,6 +16,40 @@ from .errors import (
 from .ssh_client import SSHClient
 
 
+def format_bytes(n: int) -> str:
+    """Return a human-readable byte string (base-1024)."""
+    if n < 0:
+        raise ValueError("byte count must be non-negative")
+    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    value = float(n)
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.2f} {unit}"
+        value /= 1024.0
+    return f"{value:.2f} {units[-1]}"
+
+
+def compute_local_size(path: str, excludes: List[str]) -> int:
+    """Sum file sizes under path, honouring exclude patterns."""
+
+    def is_excluded(name: str) -> bool:
+        return any(fnmatch.fnmatch(name, pattern) for pattern in excludes)
+
+    total = 0
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if not is_excluded(d)]
+        for filename in files:
+            if is_excluded(filename):
+                continue
+            try:
+                total += os.path.getsize(os.path.join(root, filename))
+            except OSError:
+                continue
+    return total
+
+
 class CodeSync:
     """Sync a local directory to a remote directory over SSH/rsync."""
 
@@ -26,12 +60,16 @@ class CodeSync:
         remote_dir: str,
         excludes: Optional[List[str]] = None,
         rsync_cmd: Optional[Callable[..., subprocess.CompletedProcess]] = None,
+        progress: Optional[Callable[[str], None]] = None,
+        free_space_margin: float = 1.0,
     ):
         self.ssh = ssh
         self.local_dir = os.path.abspath(local_dir)
         self.remote_dir = remote_dir
         self.excludes = excludes or []
         self.rsync_cmd = rsync_cmd or subprocess.run
+        self.progress = progress or (lambda _msg: None)
+        self.free_space_margin = free_space_margin
 
     def _remote_dir_status(self) -> tuple:
         """Return (exists, writable) by running tests on the access node."""
@@ -59,23 +97,67 @@ class CodeSync:
             )
 
     def _check_disk_space(self) -> None:
-        """Pre-flight check of remote disk usage."""
-        rc, out, err = self.ssh.exec_command(f"df -h {shlex.quote(self.remote_dir)}")
+        """Pre-flight check of remote disk space against local upload size.
+
+        Uses ``df -B1 -P`` for byte-accurate free space, computes the local
+        directory size honouring excludes, and raises ``SyncDiskFullError``
+        before rsync if the remote filesystem cannot accommodate the upload
+        with the configured safety margin.
+        """
+        local_size = compute_local_size(self.local_dir, self.excludes)
+        required = int(local_size * self.free_space_margin)
+
+        rc, out, err = self.ssh.exec_command(
+            f"df -B1 -P {shlex.quote(self.remote_dir)}"
+        )
         if rc != 0:
-            return  # do not block sync if df is unavailable
-        # df output like: Filesystem Size Used Avail Use% Mounted on
+            self.progress(
+                "Could not determine remote free space; continuing sync."
+            )
+            return
+
+        # POSIX df: header + one data line. Example:
+        # Filesystem         1B-blocks     Used Available Use% Mounted on
+        # /dev/sda1       10737418240 5679089   5058327  53% /home
         lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-        if len(lines) >= 2:
-            parts = lines[-1].split()
-            if len(parts) >= 5:
-                use_percent = parts[4].replace("%", "")
-                try:
-                    if int(use_percent) >= 99:
-                        raise SyncDiskFullError(
-                            f"Remote filesystem is {use_percent}% full for {self.remote_dir}."
-                        )
-                except ValueError:
-                    pass
+        if len(lines) < 2:
+            self.progress(
+                "Remote free space output was unexpected; continuing sync."
+            )
+            return
+
+        parts = lines[-1].split()
+        # POSIX guarantees: fs, blocks, used, available, capacity, mountpoint
+        if len(parts) < 5:
+            self.progress(
+                "Could not parse remote free space; continuing sync."
+            )
+            return
+
+        try:
+            total = int(parts[1])
+            available = int(parts[3])
+            use_percent = parts[4].rstrip("%")
+        except (ValueError, IndexError):
+            self.progress(
+                "Could not parse remote free space; continuing sync."
+            )
+            return
+
+        self.progress(
+            f"Upload size: {format_bytes(local_size)}; "
+            f"remote free: {format_bytes(available)} / {format_bytes(total)} "
+            f"({use_percent}% used)"
+        )
+
+        if available < required:
+            raise SyncDiskFullError(
+                f"Insufficient disk space for sync to {self.remote_dir}: "
+                f"upload requires {format_bytes(required)} "
+                f"({self.free_space_margin}x margin), "
+                f"but only {format_bytes(available)} is available "
+                f"({use_percent}% used)."
+            )
 
     def _build_rsync_cmd(self) -> List[str]:
         """Construct rsync command with excludes and SSH key."""

@@ -157,6 +157,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Maximum SSH connection attempts (default: 1, fail-fast)",
     )
     parser.add_argument(
+        "--sync-free-space-margin",
+        type=float,
+        help="Minimum free-space multiplier for remote sync (default: 1.1)",
+    )
+    parser.add_argument(
         "--test-connection",
         action="store_true",
         help="Verify SSH connectivity to the access node once and exit",
@@ -265,6 +270,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         no_sync=args.no_sync,
         full_logs=args.full_logs,
         dry_run=args.dry_run,
+        sync_free_space_margin=args.sync_free_space_margin,
     )
 
 

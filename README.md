@@ -38,9 +38,37 @@ conda_module: miniconda3
 sync_excludes:
   - ".git"
   - "__pycache__"
+# Optional: require at least 1.1x the local project size to be free on the remote filesystem
+sync_free_space_margin: 1.1
 ```
 
 The config file is automatically restricted to owner-only access (`600`) because it may contain SSH credentials.
+
+### Disk-space check
+
+Before running `rsync`, `ulhpc-submit` estimates the local upload size (respecting `sync_excludes`) and queries the remote filesystem for free space. You will see output like:
+
+```text
+[ulhpc-submit] Upload size: 12.45 MiB; remote free: 45.20 GiB / 100.00 GiB (55% used)
+```
+
+If the available space is less than `local_size × sync_free_space_margin`, the submission stops before any data is transferred:
+
+```text
+[SYNC_DISK_FULL] Insufficient disk space for sync to /home/user/hpc_runs/my_exp: upload requires 13.70 MiB (1.1x margin), but only 10.00 MiB is available (99% used).
+```
+
+You can override the margin per command:
+
+```bash
+# require exactly the local project size to be free
+ulhpc-submit --sync-free-space-margin 1.0 python main.py
+
+# or via environment variable
+ULHPC_SYNC_FREE_SPACE_MARGIN=1.5 ulhpc-submit python main.py
+```
+
+If the remote `df` command is unavailable or returns unexpected output, the tool prints a warning and continues the sync rather than blocking the submission.
 
 Configuration values are resolved in this order:
 

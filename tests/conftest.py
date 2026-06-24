@@ -47,8 +47,13 @@ class FakeSSHClient:
             return 0, "EXISTS\nWRITABLE\n", ""
         if "mkdir -p" in command:
             return 0, "", ""
-        if "df -h" in command:
-            return 0, f"Filesystem Size Used Avail Use% Mounted\n/dev/sda 100G 10G 90G 10% {command.split()[-1]}", ""
+        if "df -B1 -P" in command:
+            return (
+                0,
+                f"Filesystem     1B-blocks        Used    Available Use% Mounted on\n"
+                f"/dev/sda      107374182400   10737418240  96636764160  10% {command.split()[-1]}",
+                "",
+            )
         if "find " in command and "wc -l" in command:
             return 0, "0\n", ""
         if "tail -n" in command:

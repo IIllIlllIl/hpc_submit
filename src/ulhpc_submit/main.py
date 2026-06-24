@@ -103,6 +103,8 @@ class SubmissionPipeline:
                     local_dir=str(self.local_dir),
                     remote_dir=self.remote_dir,
                     excludes=self.config.sync_excludes,
+                    progress=self.progress,
+                    free_space_margin=self.config.sync_free_space_margin,
                 )
                 if self.dry_run:
                     self._announce(f"Dry-run rsync command: {sync.sync_dry_run()}")

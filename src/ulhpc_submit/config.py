@@ -33,6 +33,7 @@ DEFAULTS: Dict[str, Any] = {
     "python_module": "lang/Python/3.11",
     "container_module": "apptainer",
     "sync_excludes": [".git", "__pycache__", "*.pyc", ".env", "node_modules", ".ulhpc_submit", "Dockerfile"],
+    "sync_free_space_margin": 1.1,
     "poll_interval": 10,
     "pending_timeout": 3600,
     "max_ssh_retries": 1,
@@ -58,6 +59,7 @@ class Config:
     python_module: str
     container_module: str = "apptainer"
     sync_excludes: List[str] = field(default_factory=list)
+    sync_free_space_margin: float = 1.1
     poll_interval: int = 10
     pending_timeout: int = 3600
     max_ssh_retries: int = 1
@@ -101,6 +103,7 @@ ENV_VAR_MAP: Dict[str, str] = {
     "conda_module": "ULHPC_CONDA_MODULE",
     "python_module": "ULHPC_PYTHON_MODULE",
     "container_module": "ULHPC_CONTAINER_MODULE",
+    "sync_free_space_margin": "ULHPC_SYNC_FREE_SPACE_MARGIN",
     "poll_interval": "ULHPC_POLL_INTERVAL",
     "pending_timeout": "ULHPC_PENDING_TIMEOUT",
     "max_ssh_retries": "ULHPC_MAX_SSH_RETRIES",
@@ -128,6 +131,11 @@ def load_env_overrides() -> Dict[str, Any]:
         }:
             try:
                 value = int(value)
+            except ValueError:
+                continue
+        elif cfg_name == "sync_free_space_margin":
+            try:
+                value = float(value)
             except ValueError:
                 continue
         overrides[cfg_name] = value
@@ -272,6 +280,7 @@ def build_config_from_args(args: Any, warn_missing: bool = False) -> Config:
         "time": "default_time",
         "conda_module": "conda_module",
         "python_module": "python_module",
+        "sync_free_space_margin": "sync_free_space_margin",
         "poll_interval": "poll_interval",
         "pending_timeout": "pending_timeout",
         "max_ssh_retries": "max_ssh_retries",
