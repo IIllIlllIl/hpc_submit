@@ -71,6 +71,30 @@ def test_parse_args_persistent_output_options():
     assert args.command == ["python", "main.py"]
 
 
+def test_parse_args_apptainer_dirs():
+    args = parse_args([
+        "--apptainer-cache-dir", "/scratch/cache",
+        "--apptainer-tmp-dir", "/scratch/tmp",
+        "--apptainer-sif-cache-dir", "/scratch/sif",
+        "--container", "~/images/app.sif",
+        "python", "main.py",
+    ])
+    assert args.apptainer_cache_dir == "/scratch/cache"
+    assert args.apptainer_tmp_dir == "/scratch/tmp"
+    assert args.apptainer_sif_cache_dir == "/scratch/sif"
+
+
+def test_parse_args_remote_extra_policy():
+    args = parse_args(["--remote-ignore-extra", "python", "main.py"])
+    assert args.sync_remote_extra_policy == "ignore"
+
+    args = parse_args(["--remote-clean-excluded", "python", "main.py"])
+    assert args.sync_remote_extra_policy == "clean"
+
+    args = parse_args(["--sync-strict", "python", "main.py"])
+    assert args.sync_remote_extra_policy == "strict"
+
+
 def test_parse_args_no_command():
     with pytest.raises(SystemExit):
         parse_args([])
@@ -247,6 +271,134 @@ def test_cli_persistent_output_passed_to_pipeline(project_dir, monkeypatch):
     ])
     assert rc == 0
     assert calls[0]["persistent_output"] == ["output/run:~/hpc_run_state/project/run"]
+
+
+def test_cli_apptainer_dirs_passed_to_pipeline(project_dir, monkeypatch):
+    from ulhpc_submit import main as main_module
+
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "SubmissionPipeline", FakePipeline)
+
+    rc = main([
+        "--local-dir", str(project_dir),
+        "--user", "testuser",
+        "--container", "~/images/app.sif",
+        "--apptainer-cache-dir", "/scratch/cache",
+        "--apptainer-tmp-dir", "/scratch/tmp",
+        "--apptainer-sif-cache-dir", "/scratch/sif",
+        "python", "main.py",
+    ])
+    assert rc == 0
+    assert calls[0]["apptainer_cache_dir"] == "/scratch/cache"
+    assert calls[0]["apptainer_tmp_dir"] == "/scratch/tmp"
+    assert calls[0]["apptainer_sif_cache_dir"] == "/scratch/sif"
+
+
+def test_cli_remote_extra_policy_passed_to_pipeline(project_dir, monkeypatch):
+    from ulhpc_submit import main as main_module
+
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "SubmissionPipeline", FakePipeline)
+
+    rc = main([
+        "--local-dir", str(project_dir),
+        "--user", "testuser",
+        "--remote-ignore-extra",
+        "python", "main.py",
+    ])
+    assert rc == 0
+    assert calls[0]["sync_remote_extra_policy"] == "ignore"
+
+
+def test_cli_doctor_success(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def connect(self):
+            pass
+
+        def expand_remote_path(self, path):
+            return path
+
+        def exec_command(self, command):
+            return 0, "", ""
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main(["doctor", "--user", "testuser", "--module", "lang/Python/3.11"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "SSH OK" in captured.out
+    assert "Remote directory writable" in captured.out
+    assert "Module available: lang/Python/3.11" in captured.out
+    assert "Partition visible" in captured.out
+
+
+def test_cli_fetch_success(monkeypatch, tmp_path, capsys):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        f"user: testuser\nlog_dir: {tmp_path / 'logs'}\n",
+        encoding="utf-8",
+    )
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            self.files = {
+                "/remote/job_123.out": "stdout line\n",
+                "/remote/job_123.err": "stderr line\n",
+            }
+
+        def connect(self):
+            pass
+
+        def expand_remote_path(self, path):
+            return path
+
+        def exec_command(self, command):
+            path = command.split()[-1]
+            return 0, self.files.get(path, ""), ""
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main([
+        "fetch",
+        "--config", str(config_path),
+        "--job-id", "123",
+        "--remote-dir", "/remote",
+    ])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "Fetched logs for job 123" in captured.out
+    logs = list((tmp_path / "logs").glob("fetch_123_*/run.log"))
+    assert logs
+    text = logs[0].read_text(encoding="utf-8")
+    assert "stdout line" in text
+    assert "stderr line" in text
 
 
 def test_cli_rejects_placeholder_user(capsys, monkeypatch, tmp_path):

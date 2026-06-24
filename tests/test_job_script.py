@@ -87,3 +87,23 @@ def test_script_python_executable_rewrites_python_command(project_dir: Path, tmp
     )
     script = builder.build()
     assert "python3 main.py" in script
+
+
+def test_script_exports_apptainer_cache_dirs(project_dir: Path, tmp_config: Config):
+    builder = JobScriptBuilder(
+        config=tmp_config,
+        command=["python", "main.py"],
+        project_dir=str(project_dir),
+        remote_dir="~/hpc_runs/sample_project",
+        container="~/images/app.sif",
+        apptainer_cache_dir="/scratch/cache",
+        apptainer_tmp_dir="/scratch/tmp",
+        apptainer_sif_cache_dir="/scratch/sif",
+    )
+    script = builder.build()
+    assert "mkdir -p /scratch/cache" in script
+    assert 'export APPTAINER_CACHEDIR="/scratch/cache"' in script
+    assert "mkdir -p /scratch/tmp" in script
+    assert 'export APPTAINER_TMPDIR="/scratch/tmp"' in script
+    assert "mkdir -p /scratch/sif" in script
+    assert 'export ULHPC_APPTAINER_SIF_CACHE_DIR="/scratch/sif"' in script

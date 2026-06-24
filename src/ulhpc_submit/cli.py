@@ -17,6 +17,7 @@ from .config import (
     validate_config,
 )
 from .errors import ConfigError, SyncNetworkError
+from .logs import LogManager, create_run_logger
 from .main import submit_hpc_task
 from .ssh_client import SSHClient
 
@@ -145,6 +146,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Apptainer/Singularity image path (.sif). The user command will be run inside the container.",
     )
     parser.add_argument(
+        "--apptainer-cache-dir",
+        help="Remote APPTAINER_CACHEDIR for Apptainer layer cache",
+    )
+    parser.add_argument(
+        "--apptainer-tmp-dir",
+        help="Remote APPTAINER_TMPDIR for Apptainer temporary build data",
+    )
+    parser.add_argument(
+        "--apptainer-sif-cache-dir",
+        help="Remote directory for project-managed SIF cache metadata",
+    )
+    parser.add_argument(
         "--env-file",
         help="Ignored for compatibility; environment.yml/requirements.txt are auto-detected",
     )
@@ -173,6 +186,29 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         metavar="PROJECT_PATH:REMOTE",
         help="Link a project output/state path to a persistent remote directory; may be repeated",
+    )
+    extra_policy = parser.add_mutually_exclusive_group()
+    extra_policy.add_argument(
+        "--sync-strict",
+        dest="sync_remote_extra_policy",
+        action="store_const",
+        const="strict",
+        default=None,
+        help="Fail when remote workdir contains extra files after sync",
+    )
+    extra_policy.add_argument(
+        "--remote-ignore-extra",
+        dest="sync_remote_extra_policy",
+        action="store_const",
+        const="ignore",
+        help="Ignore extra remote files after sync when local files are present",
+    )
+    extra_policy.add_argument(
+        "--remote-clean-excluded",
+        dest="sync_remote_extra_policy",
+        action="store_const",
+        const="clean",
+        help="Delete extra remote files reported by the integrity check",
     )
     parser.add_argument(
         "--full-logs",
@@ -239,7 +275,147 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return args
 
 
+def _add_connection_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--user")
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--remote-dir")
+    parser.add_argument("--partition")
+    parser.add_argument("--max-ssh-retries", type=int)
+    parser.add_argument("--ssh-key")
+
+
+def parse_doctor_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="ulhpc-submit doctor",
+        description="Run fail-fast local and remote checks before submission.",
+    )
+    _add_connection_args(parser)
+    parser.add_argument(
+        "--module",
+        dest="runtime_modules",
+        action="append",
+        default=None,
+        help="Remote environment module to check; may be repeated",
+    )
+    return parser.parse_args(argv)
+
+
+def parse_fetch_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="ulhpc-submit fetch",
+        description="Fetch stdout/stderr for an existing Slurm job.",
+    )
+    _add_connection_args(parser)
+    parser.add_argument("--job-id", required=True)
+    parser.add_argument("--full-logs", action="store_true")
+    return parser.parse_args(argv)
+
+
+def _run_doctor(argv: Optional[List[str]] = None) -> int:
+    args = parse_doctor_args(argv)
+    config = build_config_from_args(args, warn_missing=True)
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+        return 2
+
+    ssh = SSHClient(
+        host=config.host,
+        port=config.port,
+        user=config.user,
+        key_path=config.ssh_key,
+        key_passphrase=config.ssh_key_passphrase,
+        max_retries=config.max_ssh_retries,
+    )
+    try:
+        ssh.connect()
+        print(f"[ulhpc-submit] SSH OK: {config.user}@{config.host}:{config.port}")
+        remote_dir = ssh.expand_remote_path(
+            args.remote_dir or config.expand_remote_project_dir("doctor")
+        )
+        rc, out, err = ssh.exec_command(
+            f"mkdir -p {remote_dir!r} && test -w {remote_dir!r}"
+        )
+        if rc != 0:
+            print(f"[ulhpc-submit] ERROR remote directory is not writable: {err}", file=sys.stderr)
+            return 1
+        print(f"[ulhpc-submit] Remote directory writable: {remote_dir}")
+
+        modules = args.runtime_modules or config.runtime_modules
+        for module in modules:
+            rc, _, err = ssh.exec_command(f"module avail {module}")
+            if rc != 0:
+                print(f"[ulhpc-submit] ERROR module not available: {module}: {err}", file=sys.stderr)
+                return 1
+            print(f"[ulhpc-submit] Module available: {module}")
+
+        partition = args.partition or config.default_partition
+        rc, _, err = ssh.exec_command(f"sinfo -h -p {partition}")
+        if rc != 0:
+            print(f"[ulhpc-submit] ERROR partition check failed: {partition}: {err}", file=sys.stderr)
+            return 1
+        print(f"[ulhpc-submit] Partition visible: {partition}")
+        return 0
+    except SyncNetworkError as exc:
+        print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+        return 2
+    finally:
+        ssh.close()
+
+
+def _run_fetch(argv: Optional[List[str]] = None) -> int:
+    args = parse_fetch_args(argv)
+    config = build_config_from_args(args, warn_missing=True)
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+        return 2
+    if not args.remote_dir:
+        print("[ulhpc-submit] ERROR fetch requires --remote-dir", file=sys.stderr)
+        return 2
+
+    ssh = SSHClient(
+        host=config.host,
+        port=config.port,
+        user=config.user,
+        key_path=config.ssh_key,
+        key_passphrase=config.ssh_key_passphrase,
+        max_retries=config.max_ssh_retries,
+    )
+    try:
+        ssh.connect()
+        remote_dir = ssh.expand_remote_path(args.remote_dir)
+        logger = create_run_logger(config.resolved_log_dir(), f"fetch_{args.job_id}")
+        manager = LogManager(
+            ssh=ssh,
+            remote_dir=remote_dir,
+            job_id=args.job_id,
+            run_logger=logger,
+            full_logs=args.full_logs,
+        )
+        stdout, stderr = manager.fetch()
+        manager.merge(stdout, stderr)
+        print(f"[ulhpc-submit] Fetched logs for job {args.job_id}: {logger.log_file}")
+        return 0
+    except SyncNetworkError as exc:
+        print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+        return 2
+    finally:
+        ssh.close()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "doctor":
+        return _run_doctor(argv[1:])
+    if argv and argv[0] == "fetch":
+        return _run_fetch(argv[1:])
+
     args = parse_args(argv)
 
     if args.init_config:
@@ -315,10 +491,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         python_executable=args.python,
         use_conda=False if args.no_conda else None,
         container=args.container,
+        apptainer_cache_dir=args.apptainer_cache_dir,
+        apptainer_tmp_dir=args.apptainer_tmp_dir,
+        apptainer_sif_cache_dir=args.apptainer_sif_cache_dir,
         no_sync=args.no_sync,
         stage_data=args.stage_data,
         link_as=args.link_as,
         persistent_output=args.persistent_output,
+        sync_remote_extra_policy=args.sync_remote_extra_policy,
         full_logs=args.full_logs,
         submit_only=args.submit_only,
         dry_run=args.dry_run,

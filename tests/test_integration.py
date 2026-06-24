@@ -358,3 +358,62 @@ def test_persistent_output_links_remote_state_into_project(
     assert str(remote_root / "output" / "run") in commands
     captured = capsys.readouterr()
     assert "Linked persistent output" in captured.out
+
+
+def test_dry_run_prints_full_plan_without_submit(project_dir: Path, tmp_path: Path, monkeypatch, capsys):
+    from conftest import FakeSSHClient
+
+    import ulhpc_submit.main as main_module
+
+    instances = []
+
+    class DryRunSSH(FakeSSHClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            instances.append(self)
+
+    monkeypatch.setattr(main_module, "SSHClient", DryRunSSH)
+
+    remote_root = tmp_path / "remote" / "sample_project"
+    cfg = Config(
+        host="access-iris.uni.lu",
+        port=8022,
+        user="testuser",
+        remote_project_dir=str(remote_root),
+        default_partition="batch",
+        default_nodes=1,
+        default_ntasks=1,
+        default_cpus_per_task=1,
+        default_mem="4G",
+        default_time="01:00:00",
+        conda_module="miniconda3",
+        python_module="lang/Python/3.11",
+        sync_excludes=[".git", "output"],
+        poll_interval=0,
+        pending_timeout=3600,
+        log_dir=str(tmp_path / "logs"),
+    )
+
+    rc = submit_hpc_task(
+        config=cfg,
+        command=["python", "main.py"],
+        local_dir=str(project_dir),
+        remote_dir=str(remote_root),
+        stage_data=[f"{tmp_path / 'dataset'}:{tmp_path / 'hpc_datasets' / 'dataset'}"],
+        link_as=["output/dataset"],
+        persistent_output=[f"output/run:{tmp_path / 'hpc_run_state' / 'run'}"],
+        dry_run=True,
+    )
+
+    assert rc == 0
+    commands = "\n".join(instances[0].commands)
+    assert "sbatch" not in commands
+    assert "ln -sfn" not in commands
+    captured = capsys.readouterr()
+    assert "=== final configuration ===" in captured.out
+    assert "=== rsync plan ===" in captured.out
+    assert "estimated upload size:" in captured.out
+    assert "=== data staging ===" in captured.out
+    assert "=== persistent outputs ===" in captured.out
+    assert "=== slurm script ===" in captured.out
+    assert "#SBATCH --partition=batch" in captured.out

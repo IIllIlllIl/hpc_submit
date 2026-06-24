@@ -3,6 +3,7 @@
 import sys
 import traceback
 import shlex
+import yaml
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -39,12 +40,16 @@ class SubmissionPipeline:
         python_executable: Optional[str] = None,
         use_conda: Optional[bool] = None,
         container: Optional[str] = None,
+        apptainer_cache_dir: Optional[str] = None,
+        apptainer_tmp_dir: Optional[str] = None,
+        apptainer_sif_cache_dir: Optional[str] = None,
         no_sync: bool = False,
         stage_data: Optional[List[str]] = None,
         link_as: Optional[List[str]] = None,
         data_mounts: Optional[List[Dict[str, str]]] = None,
         persistent_output: Optional[List[str]] = None,
         persistent_outputs: Optional[List[Dict[str, str]]] = None,
+        sync_remote_extra_policy: Optional[str] = None,
         full_logs: bool = False,
         submit_only: bool = False,
         dry_run: bool = False,
@@ -67,12 +72,20 @@ class SubmissionPipeline:
         self.python_executable = python_executable or config.python_executable
         self.use_conda = config.use_conda if use_conda is None else use_conda
         self.container = container
+        self.apptainer_cache_dir = apptainer_cache_dir or config.apptainer_cache_dir
+        self.apptainer_tmp_dir = apptainer_tmp_dir or config.apptainer_tmp_dir
+        self.apptainer_sif_cache_dir = (
+            apptainer_sif_cache_dir or config.apptainer_sif_cache_dir
+        )
         self.no_sync = no_sync
         self.stage_data = stage_data or []
         self.link_as = link_as or []
         self.data_mounts = self._build_data_mounts(data_mounts)
         self.persistent_output = persistent_output or []
         self.persistent_outputs = self._build_persistent_outputs(persistent_outputs)
+        self.sync_remote_extra_policy = (
+            sync_remote_extra_policy or config.sync_remote_extra_policy
+        )
         self.full_logs = full_logs
         self.submit_only = submit_only
         self.dry_run = dry_run
@@ -218,6 +231,59 @@ class SubmissionPipeline:
             self._create_remote_symlink(remote_path, link_path)
             self._announce(f"Linked persistent output {link_path} -> {remote_path}")
 
+    def _safe_config_summary(self) -> Dict[str, object]:
+        data = dict(self.config.__dict__)
+        for key in ("ssh_key", "ssh_key_passphrase"):
+            if data.get(key):
+                data[key] = "<redacted>"
+        data.update(
+            {
+                "remote_dir": self.remote_dir,
+                "job_name": self.job_name,
+                "command": self.command,
+                "submit_only": self.submit_only,
+                "no_sync": self.no_sync,
+                "runtime_modules": self.runtime_modules,
+                "python_executable": self.python_executable,
+                "use_conda": self.use_conda,
+                "container": self.container,
+                "sync_remote_extra_policy": self.sync_remote_extra_policy,
+            }
+        )
+        return data
+
+    def _print_dry_run_plan(self, sync: Optional[CodeSync], script: str) -> None:
+        self._announce("Dry-run plan")
+        self.progress("=== final configuration ===")
+        self.progress(yaml.safe_dump(self._safe_config_summary(), sort_keys=True).rstrip())
+        self.progress("=== rsync plan ===")
+        if self.no_sync:
+            self.progress("code sync: skipped (--no-sync)")
+        elif sync:
+            self.progress(f"command: {sync.sync_dry_run()}")
+            self.progress(f"excludes: {', '.join(self.config.sync_excludes) or '(none)'}")
+            self.progress(
+                f"estimated upload size: {CodeSync.format_upload_size(str(self.local_dir), self.config.sync_excludes)}"
+            )
+        self.progress("=== remote paths ===")
+        self.progress(f"workdir: {self.remote_dir}")
+        self.progress("stdout: job_%j.out")
+        self.progress("stderr: job_%j.err")
+        if self.data_mounts:
+            self.progress("=== data staging ===")
+            for mount in self.data_mounts:
+                self.progress(
+                    f"{mount.get('local')} -> {mount.get('remote')} link_as={mount.get('link_as', '')}"
+                )
+        if self.persistent_outputs:
+            self.progress("=== persistent outputs ===")
+            for item in self.persistent_outputs:
+                project_path = item.get("project_path") or item.get("local") or item.get("path")
+                remote = item.get("remote") or item.get("remote_path")
+                self.progress(f"{project_path} -> {remote}")
+        self.progress("=== slurm script ===")
+        self.progress(script)
+
     def run(self) -> int:
         """Execute the full pipeline and return an exit code."""
         self.logger = create_run_logger(
@@ -234,6 +300,7 @@ class SubmissionPipeline:
             self.remote_dir = self.ssh.expand_remote_path(self.remote_dir)
 
             # 1. Sync code
+            sync = None
             if not self.no_sync:
                 self._announce(f"Syncing {self.local_dir} -> {self.remote_dir}")
                 sync = CodeSync(
@@ -243,6 +310,7 @@ class SubmissionPipeline:
                     excludes=self.config.sync_excludes,
                     progress=self.progress,
                     free_space_margin=self.config.sync_free_space_margin,
+                    remote_extra_policy=self.sync_remote_extra_policy,
                 )
                 if self.dry_run:
                     self._announce(f"Dry-run rsync command: {sync.sync_dry_run()}")
@@ -252,11 +320,12 @@ class SubmissionPipeline:
             else:
                 self._announce("Skipping code sync (--no-sync)")
 
-            # 1b. Stage external data outside the project sync tree.
-            self._stage_data_mounts()
+            if not self.dry_run:
+                # 1b. Stage external data outside the project sync tree.
+                self._stage_data_mounts()
 
-            # 1c. Link persistent output/state directories into the project.
-            self._prepare_persistent_outputs()
+                # 1c. Link persistent output/state directories into the project.
+                self._prepare_persistent_outputs()
 
             # 2. Validate dependency files
             env_manager = EnvironmentManager(
@@ -295,12 +364,14 @@ class SubmissionPipeline:
                 python_executable=self.python_executable,
                 use_conda=self.use_conda,
                 container=self.container,
+                apptainer_cache_dir=self.apptainer_cache_dir,
+                apptainer_tmp_dir=self.apptainer_tmp_dir,
+                apptainer_sif_cache_dir=self.apptainer_sif_cache_dir,
             )
             script_path = builder.write()
             self._announce(f"Generated Slurm script: {script_path}")
             if self.dry_run:
-                self._announce("Dry-run mode: printing generated script")
-                self.progress(builder.build())
+                self._print_dry_run_plan(sync, builder.build())
                 self._announce("Dry-run complete; no job submitted.")
                 return 0
 

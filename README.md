@@ -119,12 +119,45 @@ ulhpc-submit --container ~/images/myenv.sif --time 01:00:00 python main.py
 
 The user command is wrapped as `apptainer exec ~/images/myenv.sif python main.py` inside the Slurm script. If your command already starts with `apptainer` or `singularity`, it is passed through unchanged.
 
+For long container workflows, keep Apptainer cache and temporary data on a suitable remote filesystem:
+
+```bash
+ulhpc-submit --container ~/images/myenv.sif \
+  --apptainer-cache-dir /scratch/$USER/apptainer-cache \
+  --apptainer-tmp-dir /scratch/$USER/apptainer-tmp \
+  --apptainer-sif-cache-dir /scratch/$USER/sif-cache \
+  python main.py
+```
+
 ## Dry-run
 
 Inspect the generated Slurm script and rsync command without submitting:
 
 ```bash
 ulhpc-submit --dry-run python main.py
+```
+
+The dry-run output includes the merged configuration, rsync command, exclude rules, remote paths, staging/persistent-output plan, and full Slurm script.
+
+## Preflight and retrieval
+
+Run fail-fast checks before a full submission:
+
+```bash
+ulhpc-submit doctor --user YOUR_USERNAME --module lang/Python/3.11
+```
+
+Fetch logs for an already submitted job:
+
+```bash
+ulhpc-submit fetch --job-id 123456 --remote-dir ~/hpc_runs/my_project
+```
+
+If remote files excluded from local sync remain in the workdir, the default strict integrity check fails and lists extra paths. You can opt into controlled alternatives:
+
+```bash
+ulhpc-submit --remote-ignore-extra python main.py
+ulhpc-submit --remote-clean-excluded python main.py
 ```
 
 ## Monitoring and logs

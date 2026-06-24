@@ -37,6 +37,10 @@ class DummyArgs:
     max_ssh_retries = None
     ssh_key = None
     sync_free_space_margin = None
+    apptainer_cache_dir = None
+    apptainer_tmp_dir = None
+    apptainer_sif_cache_dir = None
+    sync_remote_extra_policy = None
 
 
 def test_load_default_config(tmp_path: Path):
@@ -159,6 +163,10 @@ def test_default_runtime_options():
     assert cfg.use_conda is True
     assert cfg.data_mounts == []
     assert cfg.persistent_outputs == []
+    assert cfg.apptainer_cache_dir is None
+    assert cfg.apptainer_tmp_dir is None
+    assert cfg.apptainer_sif_cache_dir is None
+    assert cfg.sync_remote_extra_policy == "strict"
 
 
 def test_cli_override_python_executable():
@@ -166,6 +174,17 @@ def test_cli_override_python_executable():
     args.python = "python3"
     cfg = build_config_from_args(args)
     assert cfg.python_executable == "python3"
+
+
+def test_cli_override_apptainer_dirs():
+    args = DummyArgs()
+    args.apptainer_cache_dir = "/scratch/cache"
+    args.apptainer_tmp_dir = "/scratch/tmp"
+    args.apptainer_sif_cache_dir = "/scratch/sif"
+    cfg = build_config_from_args(args)
+    assert cfg.apptainer_cache_dir == "/scratch/cache"
+    assert cfg.apptainer_tmp_dir == "/scratch/tmp"
+    assert cfg.apptainer_sif_cache_dir == "/scratch/sif"
 
 
 def test_env_override_sync_free_space_margin(monkeypatch):

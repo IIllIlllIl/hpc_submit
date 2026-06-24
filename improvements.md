@@ -212,11 +212,11 @@ ulhpc-submit --show-config --explain
 
 ### P1
 
-- [ ] `ulhpc-submit doctor`
-- [ ] Apptainer cache/tmp/SIF 参数
-- [ ] dry-run 输出完整 Slurm script 和 rsync plan
-- [ ] remote extra file 清理策略（`--remote-clean-excluded` 等）
-- [ ] remote output retrieve 单独命令，例如 `ulhpc-submit fetch --job-id ...`
+- [x] `ulhpc-submit doctor`
+- [x] Apptainer cache/tmp/SIF 参数
+- [x] dry-run 输出完整 Slurm script 和 rsync plan
+- [x] remote extra file 清理策略（`--remote-clean-excluded` 等）
+- [x] remote output retrieve 单独命令，例如 `ulhpc-submit fetch --job-id ...`
 
 ---
 

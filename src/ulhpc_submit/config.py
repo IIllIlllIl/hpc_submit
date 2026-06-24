@@ -37,6 +37,10 @@ DEFAULTS: Dict[str, Any] = {
     "use_conda": True,
     "data_mounts": [],
     "persistent_outputs": [],
+    "apptainer_cache_dir": None,
+    "apptainer_tmp_dir": None,
+    "apptainer_sif_cache_dir": None,
+    "sync_remote_extra_policy": "strict",
     "sync_excludes": [".git", "__pycache__", "*.pyc", ".env", "node_modules", ".ulhpc_submit", "Dockerfile"],
     "sync_free_space_margin": 1.1,
     "poll_interval": 10,
@@ -68,6 +72,10 @@ class Config:
     use_conda: bool = True
     data_mounts: List[Dict[str, str]] = field(default_factory=list)
     persistent_outputs: List[Dict[str, str]] = field(default_factory=list)
+    apptainer_cache_dir: Optional[str] = None
+    apptainer_tmp_dir: Optional[str] = None
+    apptainer_sif_cache_dir: Optional[str] = None
+    sync_remote_extra_policy: str = "strict"
     sync_excludes: List[str] = field(default_factory=list)
     sync_free_space_margin: float = 1.1
     poll_interval: int = 10
@@ -114,6 +122,9 @@ ENV_VAR_MAP: Dict[str, str] = {
     "python_module": "ULHPC_PYTHON_MODULE",
     "container_module": "ULHPC_CONTAINER_MODULE",
     "python_executable": "ULHPC_PYTHON",
+    "apptainer_cache_dir": "ULHPC_APPTAINER_CACHE_DIR",
+    "apptainer_tmp_dir": "ULHPC_APPTAINER_TMP_DIR",
+    "apptainer_sif_cache_dir": "ULHPC_APPTAINER_SIF_CACHE_DIR",
     "sync_free_space_margin": "ULHPC_SYNC_FREE_SPACE_MARGIN",
     "poll_interval": "ULHPC_POLL_INTERVAL",
     "pending_timeout": "ULHPC_PENDING_TIMEOUT",
@@ -292,6 +303,9 @@ def build_config_from_args(args: Any, warn_missing: bool = False) -> Config:
         "conda_module": "conda_module",
         "python_module": "python_module",
         "python": "python_executable",
+        "apptainer_cache_dir": "apptainer_cache_dir",
+        "apptainer_tmp_dir": "apptainer_tmp_dir",
+        "apptainer_sif_cache_dir": "apptainer_sif_cache_dir",
         "sync_free_space_margin": "sync_free_space_margin",
         "poll_interval": "poll_interval",
         "pending_timeout": "pending_timeout",

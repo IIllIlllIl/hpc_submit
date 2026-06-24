@@ -53,6 +53,10 @@ def compute_local_size(path: str, excludes: List[str]) -> int:
 class CodeSync:
     """Sync a local directory to a remote directory over SSH/rsync."""
 
+    @staticmethod
+    def format_upload_size(local_dir: str, excludes: List[str]) -> str:
+        return format_bytes(compute_local_size(local_dir, excludes))
+
     def __init__(
         self,
         ssh: SSHClient,
@@ -62,6 +66,7 @@ class CodeSync:
         rsync_cmd: Optional[Callable[..., subprocess.CompletedProcess]] = None,
         progress: Optional[Callable[[str], None]] = None,
         free_space_margin: float = 1.0,
+        remote_extra_policy: str = "strict",
     ):
         self.ssh = ssh
         self.local_dir = os.path.abspath(local_dir)
@@ -70,6 +75,7 @@ class CodeSync:
         self.rsync_cmd = rsync_cmd or subprocess.run
         self.progress = progress or (lambda _msg: None)
         self.free_space_margin = free_space_margin
+        self.remote_extra_policy = remote_extra_policy
 
     def _remote_dir_status(self) -> tuple:
         """Return (exists, writable) by running tests on the access node."""
@@ -227,7 +233,15 @@ class CodeSync:
         remote_files = set(self._list_remote_files())
         extra = sorted(remote_files - local_files)
         missing = sorted(local_files - remote_files)
+        return self._format_integrity_mismatch(local_count, remote_count, extra, missing)
 
+    def _format_integrity_mismatch(
+        self,
+        local_count: int,
+        remote_count: int,
+        extra: List[str],
+        missing: List[str],
+    ) -> str:
         parts = [
             f"File count mismatch after sync: local={local_count}, remote={remote_count}."
         ]
@@ -244,6 +258,56 @@ class CodeSync:
                 "Remote extra files may be leftovers from paths excluded by sync_excludes."
             )
         return " ".join(parts)
+
+    def _safe_remote_file_path(self, relative_path: str) -> str:
+        path = Path(relative_path)
+        if path.is_absolute() or ".." in path.parts:
+            raise SyncIntegrityError(
+                f"Refusing to clean unsafe remote extra path: {relative_path}"
+            )
+        return f"{self.remote_dir}/{relative_path}"
+
+    def _remove_remote_files(self, relative_paths: List[str]) -> None:
+        if not relative_paths:
+            return
+        quoted = " ".join(
+            shlex.quote(self._safe_remote_file_path(path)) for path in relative_paths
+        )
+        rc, _, err = self.ssh.exec_command(f"rm -f -- {quoted}")
+        if rc != 0:
+            raise SyncIntegrityError(
+                f"Failed to clean remote extra files: {err.strip()}"
+            )
+
+    def _handle_integrity_mismatch(self, local_count: int, remote_count: int) -> None:
+        local_files = set(self._list_local_files())
+        remote_files = set(self._list_remote_files())
+        extra = sorted(remote_files - local_files)
+        missing = sorted(local_files - remote_files)
+
+        if missing:
+            raise SyncIntegrityError(
+                self._format_integrity_mismatch(local_count, remote_count, extra, missing)
+            )
+
+        if extra and self.remote_extra_policy == "ignore":
+            self.progress(
+                f"Ignoring {len(extra)} remote extra file(s) after sync "
+                "(--remote-ignore-extra)."
+            )
+            return
+
+        if extra and self.remote_extra_policy == "clean":
+            self.progress(
+                f"Cleaning {len(extra)} remote extra file(s) after sync "
+                "(--remote-clean-excluded)."
+            )
+            self._remove_remote_files(extra)
+            return
+
+        raise SyncIntegrityError(
+            self._format_integrity_mismatch(local_count, remote_count, extra, missing)
+        )
 
     def sync(self) -> None:
         """Run full sync with checks.
@@ -302,9 +366,7 @@ class CodeSync:
         # Integrity check
         remote_count = self._count_remote_files()
         if remote_count != local_count:
-            raise SyncIntegrityError(
-                self._integrity_mismatch_message(local_count, remote_count)
-            )
+            self._handle_integrity_mismatch(local_count, remote_count)
 
     def sync_dry_run(self) -> str:
         """Return the rsync command that would be executed."""

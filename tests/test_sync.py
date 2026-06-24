@@ -117,6 +117,49 @@ def test_integrity_mismatch_lists_remote_extra_files(
     assert "sync_excludes" in message
 
 
+def test_integrity_mismatch_can_ignore_remote_extra(
+    project_dir: Path, fake_ssh, rsync_success, tmp_path: Path
+):
+    remote = tmp_path / "remote" / "sample_project"
+    (remote / "output").mkdir(parents=True)
+    (remote / "output" / "old_state.json").write_text("{}", encoding="utf-8")
+    messages = []
+    sync = CodeSync(
+        ssh=fake_ssh,
+        local_dir=str(project_dir),
+        remote_dir=str(remote),
+        excludes=["output"],
+        rsync_cmd=rsync_success,
+        remote_extra_policy="ignore",
+        progress=messages.append,
+    )
+    sync.sync()
+    assert (remote / "output" / "old_state.json").exists()
+    assert any("Ignoring 1 remote extra" in message for message in messages)
+
+
+def test_integrity_mismatch_can_clean_remote_extra(
+    project_dir: Path, fake_ssh, rsync_success, tmp_path: Path
+):
+    remote = tmp_path / "remote" / "sample_project"
+    (remote / "output").mkdir(parents=True)
+    extra = remote / "output" / "old_state.json"
+    extra.write_text("{}", encoding="utf-8")
+    messages = []
+    sync = CodeSync(
+        ssh=fake_ssh,
+        local_dir=str(project_dir),
+        remote_dir=str(remote),
+        excludes=["output"],
+        rsync_cmd=rsync_success,
+        remote_extra_policy="clean",
+        progress=messages.append,
+    )
+    sync.sync()
+    assert not extra.exists()
+    assert any("Cleaning 1 remote extra" in message for message in messages)
+
+
 def test_disk_space_progress_message(project_dir: Path, fake_ssh):
     fake_ssh.set_response(
         "df -B1 -P",

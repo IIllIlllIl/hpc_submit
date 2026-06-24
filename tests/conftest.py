@@ -48,6 +48,15 @@ class FakeSSHClient:
             return 0, "EXISTS\nWRITABLE\n", ""
         if "mkdir -p" in command:
             return 0, "", ""
+        if command.startswith("rm -f -- "):
+            try:
+                for path in shlex.split(command)[3:]:
+                    candidate = Path(path)
+                    if candidate.exists() and candidate.is_file():
+                        candidate.unlink()
+            except ValueError:
+                pass
+            return 0, "", ""
         if "df -B1 -P" in command:
             return (
                 0,

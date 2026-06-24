@@ -38,6 +38,9 @@ class JobScriptBuilder:
         runtime_modules: Optional[List[str]] = None,
         python_executable: Optional[str] = None,
         use_conda: Optional[bool] = None,
+        apptainer_cache_dir: Optional[str] = None,
+        apptainer_tmp_dir: Optional[str] = None,
+        apptainer_sif_cache_dir: Optional[str] = None,
     ):
         self.config = config
         self.command = command
@@ -62,6 +65,11 @@ class JobScriptBuilder:
         self.gpus = gpus or 0
         self.container = container
         self.python_executable = python_executable or config.python_executable
+        self.apptainer_cache_dir = apptainer_cache_dir or config.apptainer_cache_dir
+        self.apptainer_tmp_dir = apptainer_tmp_dir or config.apptainer_tmp_dir
+        self.apptainer_sif_cache_dir = (
+            apptainer_sif_cache_dir or config.apptainer_sif_cache_dir
+        )
 
     def _command_for_runtime(self) -> List[str]:
         """Apply runtime-level command rewrites without changing user args."""
@@ -139,6 +147,17 @@ class JobScriptBuilder:
             f'echo "[ulhpc-submit] container: {self.container}"',
             f'export APPTAINER_CONTAINER="{self.container}"',
         ]
+        cache_dirs = [
+            ("APPTAINER_CACHEDIR", self.apptainer_cache_dir),
+            ("APPTAINER_TMPDIR", self.apptainer_tmp_dir),
+            ("ULHPC_APPTAINER_SIF_CACHE_DIR", self.apptainer_sif_cache_dir),
+        ]
+        for env_name, path in cache_dirs:
+            if not path:
+                continue
+            quoted = shlex.quote(path)
+            lines.append(f"mkdir -p {quoted}")
+            lines.append(f'export {env_name}="{path}"')
         return "\n".join(lines)
 
     def write(self, path: Optional[str] = None) -> str:
