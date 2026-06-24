@@ -81,6 +81,8 @@ Use `--show-config` to inspect the merged configuration:
 
 ```bash
 ulhpc-submit --show-config
+ulhpc-submit --show-config --explain
+ulhpc-submit config-schema
 ```
 
 ### Need help?
@@ -138,6 +140,24 @@ ulhpc-submit --dry-run python main.py
 ```
 
 The dry-run output includes the merged configuration, rsync command, exclude rules, remote paths, staging/persistent-output plan, and full Slurm script.
+
+For wrapper tooling, request a machine-readable submission result:
+
+```bash
+ulhpc-submit --submit-only --json python main.py
+```
+
+Each submitted run also writes `manifest.json` in the local run log directory with job id, remote directory, Slurm script path, stdout/stderr paths, sync excludes, submit time, and local git commit.
+
+Optional hooks are available for explicit automation:
+
+```bash
+ulhpc-submit --pre-sync-command "python -m compileall ." \
+  --pre-run-command "echo pre-run" \
+  --post-run-command "echo post-run" \
+  --on-failure-command "echo failed" \
+  python main.py
+```
 
 ## Preflight and retrieval
 

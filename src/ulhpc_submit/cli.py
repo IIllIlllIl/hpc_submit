@@ -12,6 +12,8 @@ import yaml
 from ulhpc_submit import __version__
 
 from .config import (
+    DEFAULTS,
+    ENV_VAR_MAP,
     Config,
     build_config_from_args,
     init_config_interactive,
@@ -233,6 +235,28 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Generate script and print rsync command without submitting",
     )
     parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Print a structured JSON result to stdout for wrapper tooling",
+    )
+    parser.add_argument(
+        "--pre-sync-command",
+        help="Local shell command to run before rsync starts",
+    )
+    parser.add_argument(
+        "--pre-run-command",
+        help="Shell command injected into the Slurm script before the user command",
+    )
+    parser.add_argument(
+        "--post-run-command",
+        help="Shell command injected into the Slurm script after the user command",
+    )
+    parser.add_argument(
+        "--on-failure-command",
+        help="Shell command injected into the Slurm script when the user command fails",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Print more detailed progress messages",
@@ -267,6 +291,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Print the merged configuration and exit",
     )
     parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="With --show-config, include defaults and environment variable mappings",
+    )
+    parser.add_argument(
         "command",
         nargs=argparse.REMAINDER,
         help="Command to run on HPC, e.g. python main.py",
@@ -275,9 +304,37 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.command and args.command[0] == "--":
         args.command = args.command[1:]
-    if not args.command and not args.init_config and not args.show_config and not args.test_connection:
+    if (
+        not args.command
+        and not args.init_config
+        and not args.show_config
+        and not args.test_connection
+    ):
         parser.error("Please provide a command to run, e.g. ulhpc-submit python main.py")
     return args
+
+
+def _config_schema() -> dict:
+    return {
+        key: {
+            "default": value,
+            "env": ENV_VAR_MAP.get(key, ""),
+        }
+        for key, value in DEFAULTS.items()
+    }
+
+
+def _show_config_with_explain(config: Config) -> dict:
+    return {
+        "config": config.__dict__,
+        "schema": _config_schema(),
+        "precedence": [
+            "CLI option",
+            "ULHPC_* environment variable",
+            "config file",
+            "built-in default",
+        ],
+    }
 
 
 def _add_connection_args(parser: argparse.ArgumentParser) -> None:
@@ -424,6 +481,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_doctor(argv[1:])
     if argv and argv[0] == "fetch":
         return _run_fetch(argv[1:])
+    if argv and argv[0] == "config-schema":
+        print(yaml.safe_dump(_config_schema(), sort_keys=False, default_flow_style=False).rstrip())
+        return 0
 
     args = parse_args(argv)
 
@@ -437,7 +497,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.show_config:
         config = load_config(args.config)
-        print(yaml.safe_dump(config.__dict__, sort_keys=False, default_flow_style=False).rstrip())
+        data = _show_config_with_explain(config) if args.explain else config.__dict__
+        print(yaml.safe_dump(data, sort_keys=False, default_flow_style=False).rstrip())
         return 0
 
     if args.test_connection:
@@ -508,9 +569,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         link_as=args.link_as,
         persistent_output=args.persistent_output,
         sync_remote_extra_policy=args.sync_remote_extra_policy,
+        pre_sync_command=args.pre_sync_command,
+        pre_run_command=args.pre_run_command,
+        post_run_command=args.post_run_command,
+        on_failure_command=args.on_failure_command,
         full_logs=args.full_logs,
         submit_only=args.submit_only,
         dry_run=args.dry_run,
+        json_output=args.json_output,
     )
 
 

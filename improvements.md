@@ -341,12 +341,12 @@ ulhpc-submit --show-config --explain
 
 ### P2
 
-- [ ] Slurm job template hooks：
+- [x] Slurm job template hooks：
   - `--pre-sync-command`
   - `--pre-run-command`
   - `--post-run-command`
   - `--on-failure-command`
-- [ ] job metadata manifest：
+- [x] job metadata manifest：
   - local commit
   - remote dir
   - job id
@@ -354,7 +354,7 @@ ulhpc-submit --show-config --explain
   - Slurm script path
   - stdout/stderr path
   - sync excludes
-- [ ] structured JSON output：方便 wrapper 解析 job id 和路径，避免 grep stdout
+- [x] structured JSON output：方便 wrapper 解析 job id 和路径，避免 grep stdout
 
 ---
 

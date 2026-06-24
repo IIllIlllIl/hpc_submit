@@ -4,6 +4,10 @@ import sys
 import traceback
 import shlex
 import yaml
+import json
+import subprocess
+from datetime import datetime
+from subprocess import run as run_subprocess
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -50,9 +54,14 @@ class SubmissionPipeline:
         persistent_output: Optional[List[str]] = None,
         persistent_outputs: Optional[List[Dict[str, str]]] = None,
         sync_remote_extra_policy: Optional[str] = None,
+        pre_sync_command: Optional[str] = None,
+        pre_run_command: Optional[str] = None,
+        post_run_command: Optional[str] = None,
+        on_failure_command: Optional[str] = None,
         full_logs: bool = False,
         submit_only: bool = False,
         dry_run: bool = False,
+        json_output: bool = False,
         progress: Optional[Callable[[str], None]] = None,
     ):
         self.config = config
@@ -86,14 +95,25 @@ class SubmissionPipeline:
         self.sync_remote_extra_policy = (
             sync_remote_extra_policy or config.sync_remote_extra_policy
         )
+        self.pre_sync_command = pre_sync_command
+        self.pre_run_command = pre_run_command
+        self.post_run_command = post_run_command
+        self.on_failure_command = on_failure_command
         self.full_logs = full_logs
         self.submit_only = submit_only
         self.dry_run = dry_run
-        self.progress = progress or print
+        self.json_output = json_output
+        if progress is not None:
+            self.progress = progress
+        elif json_output:
+            self.progress = lambda msg: print(msg, file=sys.stderr)
+        else:
+            self.progress = print
 
         self.ssh: Optional[SSHClient] = None
         self.logger: Optional[RunLogger] = None
         self.job_id: Optional[str] = None
+        self.manifest_path: Optional[Path] = None
 
     def _announce(self, message: str) -> None:
         self.progress(f"[ulhpc-submit] {message}")
@@ -111,6 +131,41 @@ class SubmissionPipeline:
         )
         ssh.connect()
         return ssh
+
+    def _local_git_commit(self) -> str:
+        try:
+            result = run_subprocess(
+                ["git", "-C", str(self.local_dir), "rev-parse", "HEAD"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return ""
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    def _run_pre_sync_hook(self) -> None:
+        if not self.pre_sync_command:
+            return
+        self._announce("Running pre-sync hook")
+        result = run_subprocess(
+            self.pre_sync_command,
+            cwd=str(self.local_dir),
+            shell=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.stdout:
+            self.progress(result.stdout.rstrip())
+        if result.stderr:
+            self.progress(result.stderr.rstrip())
+        if result.returncode != 0:
+            raise ConfigError(
+                f"pre-sync hook failed with exit code {result.returncode}."
+            )
 
     def _build_data_mounts(
         self, explicit_mounts: Optional[List[Dict[str, str]]]
@@ -248,9 +303,40 @@ class SubmissionPipeline:
                 "use_conda": self.use_conda,
                 "container": self.container,
                 "sync_remote_extra_policy": self.sync_remote_extra_policy,
+                "pre_sync_command": bool(self.pre_sync_command),
+                "pre_run_command": bool(self.pre_run_command),
+                "post_run_command": bool(self.post_run_command),
+                "on_failure_command": bool(self.on_failure_command),
             }
         )
         return data
+
+    def _manifest_data(self, status: str) -> Dict[str, object]:
+        job_id = self.job_id or ""
+        return {
+            "job_id": job_id,
+            "local_commit": self._local_git_commit(),
+            "manifest_status": status,
+            "remote_dir": self.remote_dir,
+            "slurm_script_path": f"{self.remote_dir}/ulhpc_submit_job.sh",
+            "stdout_path": self._remote_stdout_path(job_id) if job_id else "",
+            "stderr_path": self._remote_stderr_path(job_id) if job_id else "",
+            "submit_time": datetime.now().isoformat(timespec="seconds"),
+            "sync_excludes": self.config.sync_excludes,
+        }
+
+    def _write_manifest(self, status: str) -> None:
+        if not self.logger:
+            return
+        self.manifest_path = self.logger.write_manifest(self._manifest_data(status))
+
+    def _emit_json_result(self, status: str, exit_code: int) -> None:
+        if not self.json_output:
+            return
+        payload = self._manifest_data(status)
+        payload["exit_code"] = exit_code
+        payload["manifest_path"] = str(self.manifest_path) if self.manifest_path else ""
+        print(json.dumps(payload, sort_keys=True))
 
     def _print_dry_run_plan(self, sync: Optional[CodeSync], script: str) -> None:
         self._announce("Dry-run plan")
@@ -302,6 +388,8 @@ class SubmissionPipeline:
             # 1. Sync code
             sync = None
             if not self.no_sync:
+                if not self.dry_run:
+                    self._run_pre_sync_hook()
                 self._announce(f"Syncing {self.local_dir} -> {self.remote_dir}")
                 sync = CodeSync(
                     ssh=self.ssh,
@@ -367,6 +455,9 @@ class SubmissionPipeline:
                 apptainer_cache_dir=self.apptainer_cache_dir,
                 apptainer_tmp_dir=self.apptainer_tmp_dir,
                 apptainer_sif_cache_dir=self.apptainer_sif_cache_dir,
+                pre_run_command=self.pre_run_command,
+                post_run_command=self.post_run_command,
+                on_failure_command=self.on_failure_command,
             )
             script_path = builder.write()
             self._announce(f"Generated Slurm script: {script_path}")
@@ -381,10 +472,12 @@ class SubmissionPipeline:
             self.job_id = job_manager.submit(remote_script)
             self._announce(f"Submitted job {self.job_id}")
             self.logger.event("JOB", "SUBMITTED", f"job_id={self.job_id}")
+            self._write_manifest("submitted")
 
             if self.submit_only:
                 self._announce_submit_only_details(self.job_id)
                 self._announce(f"Local submission log: {self.logger.log_file}")
+                self._emit_json_result("submitted", 0)
                 return 0
 
             # 5. Monitor
@@ -401,6 +494,7 @@ class SubmissionPipeline:
             self.logger.event(
                 "JOB", final_event.state, final_event.info
             )
+            self._write_manifest(final_event.state)
 
             # 6. Fetch logs
             log_manager = LogManager(
@@ -420,9 +514,11 @@ class SubmissionPipeline:
                 self.logger.error(str(classified))
                 # Surface the structured error to the user.
                 self.progress(str(classified))
+                self._emit_json_result(classified.code, 1)
                 return 1
 
             self._announce(f"Run complete. Log: {self.logger.log_file}")
+            self._emit_json_result("completed", 0)
             return 0
 
         except ULHPCError as exc:

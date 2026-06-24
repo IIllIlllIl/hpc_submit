@@ -95,6 +95,22 @@ def test_parse_args_remote_extra_policy():
     assert args.sync_remote_extra_policy == "strict"
 
 
+def test_parse_args_hooks_and_json():
+    args = parse_args([
+        "--json",
+        "--pre-sync-command", "python -m compileall .",
+        "--pre-run-command", "echo pre",
+        "--post-run-command", "echo post",
+        "--on-failure-command", "echo fail",
+        "python", "main.py",
+    ])
+    assert args.json_output is True
+    assert args.pre_sync_command == "python -m compileall ."
+    assert args.pre_run_command == "echo pre"
+    assert args.post_run_command == "echo post"
+    assert args.on_failure_command == "echo fail"
+
+
 def test_parse_args_no_command():
     with pytest.raises(SystemExit):
         parse_args([])
@@ -324,6 +340,58 @@ def test_cli_remote_extra_policy_passed_to_pipeline(project_dir, monkeypatch):
     ])
     assert rc == 0
     assert calls[0]["sync_remote_extra_policy"] == "ignore"
+
+
+def test_cli_hooks_and_json_passed_to_pipeline(project_dir, monkeypatch):
+    from ulhpc_submit import main as main_module
+
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "SubmissionPipeline", FakePipeline)
+
+    rc = main([
+        "--local-dir", str(project_dir),
+        "--user", "testuser",
+        "--json",
+        "--pre-sync-command", "echo local",
+        "--pre-run-command", "echo pre",
+        "--post-run-command", "echo post",
+        "--on-failure-command", "echo fail",
+        "python", "main.py",
+    ])
+    assert rc == 0
+    assert calls[0]["json_output"] is True
+    assert calls[0]["pre_sync_command"] == "echo local"
+    assert calls[0]["pre_run_command"] == "echo pre"
+    assert calls[0]["post_run_command"] == "echo post"
+    assert calls[0]["on_failure_command"] == "echo fail"
+
+
+def test_cli_config_schema(capsys):
+    rc = main(["config-schema"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "remote_project_dir:" in captured.out
+    assert "ULHPC_REMOTE_PROJECT_DIR" in captured.out
+
+
+def test_cli_show_config_explain(capsys, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("user: showuser\n", encoding="utf-8")
+
+    rc = main(["--config", str(config_path), "--show-config", "--explain"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "precedence:" in captured.out
+    assert "schema:" in captured.out
+    assert "showuser" in captured.out
 
 
 def test_cli_doctor_success(monkeypatch, tmp_path, capsys):

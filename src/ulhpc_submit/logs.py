@@ -51,6 +51,15 @@ class RunLogger:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         self.info(f"[{category}] {state} {detail}".strip())
 
+    def write_manifest(self, data: dict) -> Path:
+        """Write a structured job metadata manifest for wrapper tooling."""
+        path = self.run_dir / "manifest.json"
+        with path.open("w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        self.info(f"Manifest written: {path}")
+        return path
+
     def _write(self, line: str) -> None:
         with self.log_file.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")

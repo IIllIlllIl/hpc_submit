@@ -41,6 +41,9 @@ class JobScriptBuilder:
         apptainer_cache_dir: Optional[str] = None,
         apptainer_tmp_dir: Optional[str] = None,
         apptainer_sif_cache_dir: Optional[str] = None,
+        pre_run_command: Optional[str] = None,
+        post_run_command: Optional[str] = None,
+        on_failure_command: Optional[str] = None,
     ):
         self.config = config
         self.command = command
@@ -70,6 +73,9 @@ class JobScriptBuilder:
         self.apptainer_sif_cache_dir = (
             apptainer_sif_cache_dir or config.apptainer_sif_cache_dir
         )
+        self.pre_run_command = pre_run_command
+        self.post_run_command = post_run_command
+        self.on_failure_command = on_failure_command
 
     def _command_for_runtime(self) -> List[str]:
         """Apply runtime-level command rewrites without changing user args."""
@@ -126,11 +132,38 @@ class JobScriptBuilder:
             "",
             env_block,
             "",
+        ])
+
+        if self.pre_run_command:
+            lines.extend([
+                'echo "[ulhpc-submit] running pre-run hook"',
+                self.pre_run_command,
+                "",
+            ])
+
+        lines.extend([
             'echo "[ulhpc-submit] executing user command"',
             f"set +e",
             f"{wrapped_cmd}",
             "exit_code=$?",
             "set -e",
+        ])
+
+        if self.on_failure_command:
+            lines.extend([
+                "if [ \"$exit_code\" -ne 0 ]; then",
+                '    echo "[ulhpc-submit] running on-failure hook"',
+                f"    {self.on_failure_command}",
+                "fi",
+            ])
+
+        if self.post_run_command:
+            lines.extend([
+                'echo "[ulhpc-submit] running post-run hook"',
+                self.post_run_command,
+            ])
+
+        lines.extend([
             f'echo "[ulhpc-submit] exit_code=$exit_code"',
             f'echo "[ulhpc-submit] job finished at $(date)"',
             "exit $exit_code",

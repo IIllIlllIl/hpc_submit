@@ -107,3 +107,23 @@ def test_script_exports_apptainer_cache_dirs(project_dir: Path, tmp_config: Conf
     assert 'export APPTAINER_TMPDIR="/scratch/tmp"' in script
     assert "mkdir -p /scratch/sif" in script
     assert 'export ULHPC_APPTAINER_SIF_CACHE_DIR="/scratch/sif"' in script
+
+
+def test_script_injects_run_hooks(project_dir: Path, tmp_config: Config):
+    builder = JobScriptBuilder(
+        config=tmp_config,
+        command=["python", "main.py"],
+        project_dir=str(project_dir),
+        remote_dir="~/hpc_runs/sample_project",
+        pre_run_command="echo pre",
+        post_run_command="echo post",
+        on_failure_command="echo fail",
+    )
+    script = builder.build()
+    assert 'echo "[ulhpc-submit] running pre-run hook"' in script
+    assert "echo pre" in script
+    assert 'echo "[ulhpc-submit] running post-run hook"' in script
+    assert "echo post" in script
+    assert 'echo "[ulhpc-submit] running on-failure hook"' in script
+    assert "echo fail" in script
+    assert 'if [ "$exit_code" -ne 0 ]; then' in script

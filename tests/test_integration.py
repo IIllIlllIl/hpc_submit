@@ -1,5 +1,6 @@
 """End-to-end integration test with a mocked SSH client."""
 
+import json
 from pathlib import Path
 
 from ulhpc_submit.config import Config
@@ -417,3 +418,141 @@ def test_dry_run_prints_full_plan_without_submit(project_dir: Path, tmp_path: Pa
     assert "=== persistent outputs ===" in captured.out
     assert "=== slurm script ===" in captured.out
     assert "#SBATCH --partition=batch" in captured.out
+
+
+def test_submit_only_json_output_and_manifest(project_dir: Path, tmp_path: Path, monkeypatch, capsys):
+    import shutil
+    import subprocess
+
+    from conftest import FakeSSHClient
+
+    import ulhpc_submit.main as main_module
+    import ulhpc_submit.sync as sync_module
+
+    remote_root = tmp_path / "remote" / "sample_project"
+
+    class JsonSSH(FakeSSHClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.set_response("sbatch", 0, "Submitted batch job 5151\n", "")
+
+    def fake_rsync(cmd, **kwargs):
+        src = cmd[-2]
+        dst_spec = cmd[-1]
+        dst = Path(dst_spec.split(":", 1)[1])
+        dst.mkdir(parents=True, exist_ok=True)
+        for item in Path(src).iterdir():
+            if item.is_file():
+                shutil.copy2(item, dst / item.name)
+            elif item.is_dir():
+                shutil.copytree(item, dst / item.name, dirs_exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(main_module, "SSHClient", JsonSSH)
+    monkeypatch.setattr(sync_module.subprocess, "run", fake_rsync)
+
+    cfg = Config(
+        host="access-iris.uni.lu",
+        port=8022,
+        user="testuser",
+        remote_project_dir=str(remote_root),
+        default_partition="batch",
+        default_nodes=1,
+        default_ntasks=1,
+        default_cpus_per_task=1,
+        default_mem="4G",
+        default_time="01:00:00",
+        conda_module="miniconda3",
+        python_module="lang/Python/3.11",
+        sync_excludes=[".git"],
+        poll_interval=0,
+        pending_timeout=3600,
+        log_dir=str(tmp_path / "logs"),
+    )
+
+    rc = submit_hpc_task(
+        config=cfg,
+        command=["python", "main.py"],
+        local_dir=str(project_dir),
+        remote_dir=str(remote_root),
+        submit_only=True,
+        json_output=True,
+    )
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["job_id"] == "5151"
+    assert payload["remote_dir"] == str(remote_root)
+    assert payload["stdout_path"] == f"{remote_root}/job_5151.out"
+    assert payload["stderr_path"] == f"{remote_root}/job_5151.err"
+    manifest_path = Path(payload["manifest_path"])
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["job_id"] == "5151"
+    assert manifest["sync_excludes"] == [".git"]
+
+
+def test_pre_sync_hook_runs_before_sync(project_dir: Path, tmp_path: Path, monkeypatch):
+    import shutil
+    import subprocess
+
+    from conftest import FakeSSHClient
+
+    import ulhpc_submit.main as main_module
+    import ulhpc_submit.sync as sync_module
+
+    remote_root = tmp_path / "remote" / "sample_project"
+
+    class HookSSH(FakeSSHClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.set_response("sbatch", 0, "Submitted batch job 6161\n", "")
+
+    def fake_rsync(cmd, **kwargs):
+        src = cmd[-2]
+        dst_spec = cmd[-1]
+        dst = Path(dst_spec.split(":", 1)[1])
+        dst.mkdir(parents=True, exist_ok=True)
+        for item in Path(src).iterdir():
+            if item.is_file():
+                shutil.copy2(item, dst / item.name)
+            elif item.is_dir():
+                shutil.copytree(item, dst / item.name, dirs_exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(main_module, "SSHClient", HookSSH)
+    monkeypatch.setattr(sync_module.subprocess, "run", fake_rsync)
+
+    cfg = Config(
+        host="access-iris.uni.lu",
+        port=8022,
+        user="testuser",
+        remote_project_dir=str(remote_root),
+        default_partition="batch",
+        default_nodes=1,
+        default_ntasks=1,
+        default_cpus_per_task=1,
+        default_mem="4G",
+        default_time="01:00:00",
+        conda_module="miniconda3",
+        python_module="lang/Python/3.11",
+        sync_excludes=[".git"],
+        poll_interval=0,
+        pending_timeout=3600,
+        log_dir=str(tmp_path / "logs"),
+    )
+
+    marker = project_dir / "hook_marker.txt"
+    rc = submit_hpc_task(
+        config=cfg,
+        command=["python", "main.py"],
+        local_dir=str(project_dir),
+        remote_dir=str(remote_root),
+        pre_sync_command=f"printf hook > {marker.name}",
+        submit_only=True,
+    )
+
+    assert rc == 0
+    assert marker.exists()
+    assert (remote_root / "hook_marker.txt").read_text(encoding="utf-8") == "hook"
