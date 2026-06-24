@@ -1,6 +1,8 @@
 """Command-line interface for ulhpc-submit."""
 
 import argparse
+import re
+import shlex
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -20,6 +22,9 @@ from .errors import ConfigError, SyncNetworkError
 from .logs import LogManager, create_run_logger
 from .main import submit_hpc_task
 from .ssh_client import SSHClient
+
+
+JOB_ID_RE = re.compile(r"^[0-9]+(?:_[0-9]+)?$")
 
 
 HELP_EPILOG = """
@@ -336,8 +341,9 @@ def _run_doctor(argv: Optional[List[str]] = None) -> int:
         remote_dir = ssh.expand_remote_path(
             args.remote_dir or config.expand_remote_project_dir("doctor")
         )
+        quoted_remote_dir = shlex.quote(remote_dir)
         rc, out, err = ssh.exec_command(
-            f"mkdir -p {remote_dir!r} && test -w {remote_dir!r}"
+            f"mkdir -p {quoted_remote_dir} && test -w {quoted_remote_dir}"
         )
         if rc != 0:
             print(f"[ulhpc-submit] ERROR remote directory is not writable: {err}", file=sys.stderr)
@@ -346,14 +352,14 @@ def _run_doctor(argv: Optional[List[str]] = None) -> int:
 
         modules = args.runtime_modules or config.runtime_modules
         for module in modules:
-            rc, _, err = ssh.exec_command(f"module avail {module}")
+            rc, _, err = ssh.exec_command(f"module avail {shlex.quote(module)}")
             if rc != 0:
                 print(f"[ulhpc-submit] ERROR module not available: {module}: {err}", file=sys.stderr)
                 return 1
             print(f"[ulhpc-submit] Module available: {module}")
 
         partition = args.partition or config.default_partition
-        rc, _, err = ssh.exec_command(f"sinfo -h -p {partition}")
+        rc, _, err = ssh.exec_command(f"sinfo -h -p {shlex.quote(partition)}")
         if rc != 0:
             print(f"[ulhpc-submit] ERROR partition check failed: {partition}: {err}", file=sys.stderr)
             return 1
@@ -376,6 +382,9 @@ def _run_fetch(argv: Optional[List[str]] = None) -> int:
         return 2
     if not args.remote_dir:
         print("[ulhpc-submit] ERROR fetch requires --remote-dir", file=sys.stderr)
+        return 2
+    if not JOB_ID_RE.match(args.job_id):
+        print("[ulhpc-submit] ERROR fetch --job-id must be a Slurm job id, e.g. 123456", file=sys.stderr)
         return 2
 
     ssh = SSHClient(

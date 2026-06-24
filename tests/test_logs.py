@@ -25,6 +25,15 @@ def test_log_manager_fetch_and_merge(fake_ssh, tmp_path: Path):
     assert "stdout line" in log_text
 
 
+def test_log_manager_quotes_tail_paths(fake_ssh, tmp_path: Path):
+    logger = RunLogger(tmp_path / "run")
+    lm = LogManager(fake_ssh, "/remote dir", "42", logger)
+    lm.fetch()
+    commands = "\n".join(fake_ssh.commands)
+    assert "tail -n 500 '/remote dir/job_42.out'" in commands
+    assert "tail -n 500 '/remote dir/job_42.err'" in commands
+
+
 def test_classify_traceback():
     logger = RunLogger(Path("/tmp/ulhpc_test_run"))
     lm = LogManager(None, "/remote", "1", logger)

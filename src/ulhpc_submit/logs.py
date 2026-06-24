@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -97,7 +98,7 @@ class LogManager:
                 return local_tmp.read_text(encoding="utf-8", errors="replace")
             except Exception as exc:  # noqa: BLE001
                 self.run_logger.info(f"SFTP get {label} failed ({exc}); tailing via SSH")
-        cmd = f"tail -n {self.tail_lines} {remote_path}"
+        cmd = f"tail -n {self.tail_lines} {shlex.quote(remote_path)}"
         rc, out, err = self.ssh.exec_command(cmd)
         if rc != 0:
             self.run_logger.error(f"Could not fetch remote {label}: {err}")

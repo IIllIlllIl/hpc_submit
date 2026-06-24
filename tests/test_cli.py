@@ -356,6 +356,43 @@ def test_cli_doctor_success(monkeypatch, tmp_path, capsys):
     assert "Partition visible" in captured.out
 
 
+def test_cli_doctor_quotes_remote_command_inputs(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    commands = []
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            pass
+
+        def expand_remote_path(self, path):
+            return path
+
+        def exec_command(self, command):
+            commands.append(command)
+            return 0, "", ""
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main([
+        "doctor",
+        "--user", "testuser",
+        "--remote-dir", "/tmp/remote dir",
+        "--module", "weird module;touch bad",
+        "--partition", "batch;touch bad",
+    ])
+    assert rc == 0
+    joined = "\n".join(commands)
+    assert "mkdir -p '/tmp/remote dir'" in joined
+    assert "module avail 'weird module;touch bad'" in joined
+    assert "sinfo -h -p 'batch;touch bad'" in joined
+
+
 def test_cli_fetch_success(monkeypatch, tmp_path, capsys):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -399,6 +436,21 @@ def test_cli_fetch_success(monkeypatch, tmp_path, capsys):
     text = logs[0].read_text(encoding="utf-8")
     assert "stdout line" in text
     assert "stderr line" in text
+
+
+def test_cli_fetch_rejects_unsafe_job_id(monkeypatch, tmp_path, capsys):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("user: testuser\n", encoding="utf-8")
+
+    rc = main([
+        "fetch",
+        "--config", str(config_path),
+        "--job-id", "../secret",
+        "--remote-dir", "/remote",
+    ])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "job id" in captured.err.lower()
 
 
 def test_cli_rejects_placeholder_user(capsys, monkeypatch, tmp_path):
