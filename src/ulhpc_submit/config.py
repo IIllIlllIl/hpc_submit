@@ -32,6 +32,11 @@ DEFAULTS: Dict[str, Any] = {
     "conda_module": "miniconda3",
     "python_module": "lang/Python/3.11",
     "container_module": "apptainer",
+    "runtime_modules": [],
+    "python_executable": "python",
+    "use_conda": True,
+    "data_mounts": [],
+    "persistent_outputs": [],
     "sync_excludes": [".git", "__pycache__", "*.pyc", ".env", "node_modules", ".ulhpc_submit", "Dockerfile"],
     "sync_free_space_margin": 1.1,
     "poll_interval": 10,
@@ -58,6 +63,11 @@ class Config:
     conda_module: str
     python_module: str
     container_module: str = "apptainer"
+    runtime_modules: List[str] = field(default_factory=list)
+    python_executable: str = "python"
+    use_conda: bool = True
+    data_mounts: List[Dict[str, str]] = field(default_factory=list)
+    persistent_outputs: List[Dict[str, str]] = field(default_factory=list)
     sync_excludes: List[str] = field(default_factory=list)
     sync_free_space_margin: float = 1.1
     poll_interval: int = 10
@@ -103,6 +113,7 @@ ENV_VAR_MAP: Dict[str, str] = {
     "conda_module": "ULHPC_CONDA_MODULE",
     "python_module": "ULHPC_PYTHON_MODULE",
     "container_module": "ULHPC_CONTAINER_MODULE",
+    "python_executable": "ULHPC_PYTHON",
     "sync_free_space_margin": "ULHPC_SYNC_FREE_SPACE_MARGIN",
     "poll_interval": "ULHPC_POLL_INTERVAL",
     "pending_timeout": "ULHPC_PENDING_TIMEOUT",
@@ -280,6 +291,7 @@ def build_config_from_args(args: Any, warn_missing: bool = False) -> Config:
         "time": "default_time",
         "conda_module": "conda_module",
         "python_module": "python_module",
+        "python": "python_executable",
         "sync_free_space_margin": "sync_free_space_margin",
         "poll_interval": "poll_interval",
         "pending_timeout": "pending_timeout",

@@ -12,7 +12,7 @@ from ulhpc_submit.main import submit_hpc_task
 import ulhpc_submit.main as main_module
 import ulhpc_submit.sync as sync_module
 
-from tests.conftest import FakeSSHClient
+from conftest import FakeSSHClient
 
 
 def _fake_rsync_success(cmd, **kwargs):

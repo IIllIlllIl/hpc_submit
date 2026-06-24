@@ -23,11 +23,17 @@ class EnvironmentManager:
         conda_module: str = "miniconda3",
         python_module: str = "lang/Python/3.11",
         conda_env: Optional[str] = None,
+        runtime_modules: Optional[List[str]] = None,
+        python_executable: str = "python",
+        use_conda: bool = True,
     ):
         self.project_dir = Path(project_dir)
         self.conda_module = conda_module
         self.python_module = python_module
         self.conda_env = conda_env or self._default_env_name()
+        self.runtime_modules = runtime_modules or []
+        self.python_executable = python_executable
+        self.use_conda = use_conda
 
     def _default_env_name(self) -> str:
         return self.project_dir.name or "hpc_env"
@@ -82,6 +88,19 @@ class EnvironmentManager:
         lines: List[str] = []
         lines.append('echo "[ulhpc-submit] configuring environment on compute node"')
 
+        for module in self.runtime_modules:
+            lines.append(f"module load {module}")
+
+        if not self.use_conda:
+            if not self.runtime_modules and self.python_module:
+                lines.append(f"module load {self.python_module}")
+            if files["requirements"]:
+                lines.append(
+                    f"{self.python_executable} -m pip install --user -r requirements.txt"
+                )
+            lines.append('echo "[ulhpc-submit] environment ready"')
+            return "\n".join(lines)
+
         # Probe whether the requested conda module exists on this cluster.
         lines.append(f"if module load {self.conda_module} 2>/dev/null && command -v conda >/dev/null 2>&1; then")
         lines.append('    echo "[ulhpc-submit] using conda environment"')
@@ -122,7 +141,9 @@ class EnvironmentManager:
         )
         lines.append(f"    module load {self.python_module}")
         if files["requirements"]:
-            lines.append("    python -m pip install --user -r requirements.txt")
+            lines.append(
+                f"    {self.python_executable} -m pip install --user -r requirements.txt"
+            )
         lines.append("fi")
 
         lines.append('echo "[ulhpc-submit] environment ready"')

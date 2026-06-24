@@ -58,3 +58,32 @@ def test_script_writes_file(project_dir: Path, tmp_config: Config):
     path = builder.write()
     assert Path(path).exists()
     assert Path(path).stat().st_mode & 0o111  # executable
+
+
+def test_script_supports_module_runtime_without_conda(project_dir: Path, tmp_config: Config):
+    builder = JobScriptBuilder(
+        config=tmp_config,
+        command=["python", "main.py"],
+        project_dir=str(project_dir),
+        remote_dir="~/hpc_runs/sample_project",
+        runtime_modules=["lang/Python/3.11", "tools/Apptainer"],
+        python_executable="python3",
+        use_conda=False,
+    )
+    script = builder.build()
+    assert "module load lang/Python/3.11" in script
+    assert "module load tools/Apptainer" in script
+    assert "module load miniconda3" not in script
+    assert "python3 main.py" in script
+
+
+def test_script_python_executable_rewrites_python_command(project_dir: Path, tmp_config: Config):
+    builder = JobScriptBuilder(
+        config=tmp_config,
+        command=["python", "main.py"],
+        project_dir=str(project_dir),
+        remote_dir="~/hpc_runs/sample_project",
+        python_executable="python3",
+    )
+    script = builder.build()
+    assert "python3 main.py" in script

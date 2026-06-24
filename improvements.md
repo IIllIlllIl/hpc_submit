@@ -204,11 +204,11 @@ ulhpc-submit --show-config --explain
 
 ### P0（最希望删除项目侧 wrapper）
 
-- [ ] `--submit-only` / `--detach`
-- [ ] `--stage-data local:remote --link-as project_path`
-- [ ] `--persistent-output project_path:remote_path`
-- [ ] 更清晰的 sync integrity error，列出 extra files
-- [ ] `--module` / `--no-conda` / `--python` 支持
+- [x] `--submit-only` / `--detach`
+- [x] `--stage-data local:remote --link-as project_path`
+- [x] `--persistent-output project_path:remote_path`
+- [x] 更清晰的 sync integrity error，列出 extra files
+- [x] `--module` / `--no-conda` / `--python` 支持
 
 ### P1
 
@@ -217,6 +217,127 @@ ulhpc-submit --show-config --explain
 - [ ] dry-run 输出完整 Slurm script 和 rsync plan
 - [ ] remote extra file 清理策略（`--remote-clean-excluded` 等）
 - [ ] remote output retrieve 单独命令，例如 `ulhpc-submit fetch --job-id ...`
+
+---
+
+## 四、分阶段实施计划
+
+### 阶段 1：长任务 submit-only / detach 模式
+
+目标：支持 24h+ 作业提交后本地进程立即退出，不再持续监控或拉取日志。
+
+- 增加 `--submit-only` / `--detach` CLI 参数。
+- 保持同步、环境检查、Slurm 脚本生成、脚本上传、`sbatch` 提交流程不变。
+- `sbatch` 成功后打印 job id、远端 workdir、远端 stdout/stderr 日志路径、常用查询命令。
+- 跳过 `JobMonitor` 和 `LogManager`，本地进程退出不影响 Slurm job。
+
+依赖：基本独立，是后续长任务能力的基础。
+
+### 阶段 2：远端 module / runtime setup
+
+目标：支持 ULHPC Iris 上常见的 `module load + python3` 运行模式，降低对 conda 的假设。
+
+- 增加可重复 `--module`。
+- 增加 `--python`。
+- 增加 `--no-conda`。
+- Slurm script 中生成清晰的 module load 块。
+- 文档明确 `--conda-env`、`--container`、`--module` 的关系。
+
+依赖：应早于 Apptainer 参数和 doctor 的 module 检查。
+
+### 阶段 3：sync integrity 错误可诊断
+
+目标：遇到完整性检查失败时能知道具体差异，而不是只有文件数量。
+
+- `SYNC_INTEGRITY_ERROR` 中列出前 N 个远端 extra files。
+- 区分本地缺失、远端多余、exclude 规则导致的远端残留。
+- 文档说明 integrity check 的计算方式。
+
+依赖：应早于远端清理/忽略策略，先保证诊断准确。
+
+### 阶段 4：外部数据 staging
+
+目标：支持大文件/数据集独立同步到项目目录外，并在运行前链接回项目内预期路径。
+
+- 增加 `--stage-data LOCAL:REMOTE`。
+- 增加 `--link-as PROJECT_PATH` 或配置文件 `data_mounts`。
+- staging 同步与主项目同步分离。
+- 远端运行前创建 symlink。
+- staging 路径不参与普通项目 sync integrity mismatch。
+
+依赖：依赖阶段 3 对同步边界和完整性错误的澄清。
+
+### 阶段 5：持久 output / run state
+
+目标：支持跨 job resume 的 run state，不把长期输出状态混进普通代码同步目录。
+
+- 增加 `--persistent-output PROJECT_PATH:REMOTE_PATH`。
+- 运行前把远端 state symlink 到项目内路径。
+- 运行后支持可选 retrieve。
+- 增加 `--resume-output`。
+- 对旧 state 留在 `remote-dir/output/...` 的情况给出迁移或提示。
+
+依赖：可复用阶段 4 的 symlink、路径校验和独立同步设计。
+
+### 阶段 6：dry-run 增强
+
+目标：提交前完整展示将要发生的远端操作。
+
+- 显示完整 Slurm script。
+- 显示最终配置。
+- 显示 rsync include/exclude 规则。
+- 显示 remote-dir、日志路径、预计同步大小。
+- 显示 data staging、persistent output、symlink 操作计划。
+
+依赖：建议在阶段 4/5 后集中完善，避免重复改 dry-run 输出。
+
+### 阶段 7：doctor / validate
+
+目标：正式提交前 fail-fast，减少长时间等待后才发现配置或资源错误。
+
+- 增加 `ulhpc-submit doctor`。
+- 检查 access node TCP/SSH 连通性。
+- 检查远端目录是否可写。
+- 检查 module 是否存在。
+- 基础校验 Slurm partition/time/resource 请求。
+
+依赖：依赖阶段 2 的 runtime/module 模型，也可复用阶段 6 的配置展示。
+
+### 阶段 8：Apptainer cache/tmp/SIF 参数
+
+目标：原生支持容器长任务常用缓存和临时目录。
+
+- 增加 `--apptainer-cache-dir`。
+- 增加 `--apptainer-tmp-dir`。
+- 增加 `--apptainer-sif-cache-dir`。
+- Slurm script 中导出相关环境变量。
+- 文档区分 layer cache、tmp、SIF cache。
+
+依赖：依赖阶段 2 的 module/runtime 支持。
+
+### 阶段 9：远端 extra 文件策略
+
+目标：在诊断清楚后，提供可控的忽略或清理策略。
+
+- 增加 `--remote-ignore-extra`。
+- 增加 `--remote-clean-excluded`。
+- 增加 `--sync-strict`。
+- dry-run 中列出将忽略或清理的文件。
+- 清理前增加路径保护，避免误删 remote-dir 外内容。
+
+依赖：强依赖阶段 3 和阶段 6，风险高，后置实现。
+
+### 阶段 10：输出和元数据能力
+
+目标：提升自动化集成和长期可维护性。
+
+- 增加 job metadata manifest。
+- 增加 structured JSON output。
+- 增加 `ulhpc-submit fetch --job-id ...`。
+- 增加 Slurm hooks。
+- 增加 `config-schema` / `--show-config --explain`。
+
+依赖：适合在核心提交、同步、状态管理能力稳定后实现。
 
 ### P2
 

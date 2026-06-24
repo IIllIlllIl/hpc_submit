@@ -12,7 +12,7 @@ from ulhpc_submit.monitor import JobMonitor
 
 
 def test_monitor_reaches_completed(fake_ssh):
-    from tests.conftest import FakeSSHClient
+    from conftest import FakeSSHClient
 
     class TwoStepSSH(FakeSSHClient):
         def __init__(self, **kwargs):

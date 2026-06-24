@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import shlex
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -54,7 +55,31 @@ class FakeSSHClient:
                 f"/dev/sda      107374182400   10737418240  96636764160  10% {command.split()[-1]}",
                 "",
             )
+        if "find . -type f -print" in command:
+            try:
+                parts = shlex.split(command)
+                remote_dir = parts[1]
+                root = Path(remote_dir)
+                if root.exists():
+                    files = sorted(
+                        p.relative_to(root).as_posix()
+                        for p in root.rglob("*")
+                        if p.is_file()
+                    )
+                    return 0, "\n".join(files) + ("\n" if files else ""), ""
+            except (ValueError, IndexError):
+                pass
+            return 0, "", ""
         if "find " in command and "wc -l" in command:
+            try:
+                parts = shlex.split(command)
+                remote_dir = parts[1]
+                root = Path(remote_dir)
+                if root.exists():
+                    count = sum(1 for p in root.rglob("*") if p.is_file())
+                    return 0, f"{count}\n", ""
+            except (ValueError, IndexError):
+                pass
             return 0, "0\n", ""
         if "tail -n" in command:
             path = command.split()[-1]

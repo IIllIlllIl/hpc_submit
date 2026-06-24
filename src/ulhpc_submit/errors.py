@@ -69,6 +69,11 @@ class SyncIntegrityError(SyncError):
     suggestion = "File count or checksum mismatch after sync. Retry, or check excluded files."
 
 
+class StagingError(ULHPCError):
+    code = "STAGING_ERROR"
+    suggestion = "Check staging paths and ensure remote link targets do not already exist as regular files or directories."
+
+
 # ---------- Environment / dependency errors ----------
 
 class EnvError(ULHPCError):

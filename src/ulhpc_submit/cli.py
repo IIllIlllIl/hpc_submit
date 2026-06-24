@@ -124,6 +124,23 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Conda environment name to use/create",
     )
     parser.add_argument(
+        "--module",
+        dest="runtime_modules",
+        action="append",
+        default=None,
+        help="Environment module to load in the Slurm job; may be repeated",
+    )
+    parser.add_argument(
+        "--python",
+        dest="python",
+        help="Python executable to use for python commands in the Slurm job",
+    )
+    parser.add_argument(
+        "--no-conda",
+        action="store_true",
+        help="Do not load or create a conda environment; use modules/system Python instead",
+    )
+    parser.add_argument(
         "--container",
         help="Apptainer/Singularity image path (.sif). The user command will be run inside the container.",
     )
@@ -137,9 +154,37 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Skip code sync",
     )
     parser.add_argument(
+        "--stage-data",
+        action="append",
+        default=None,
+        metavar="LOCAL:REMOTE",
+        help="Sync an external data directory to a remote staging path; may be repeated",
+    )
+    parser.add_argument(
+        "--link-as",
+        action="append",
+        default=None,
+        metavar="PROJECT_PATH",
+        help="Project-relative symlink path for the corresponding --stage-data entry",
+    )
+    parser.add_argument(
+        "--persistent-output",
+        action="append",
+        default=None,
+        metavar="PROJECT_PATH:REMOTE",
+        help="Link a project output/state path to a persistent remote directory; may be repeated",
+    )
+    parser.add_argument(
         "--full-logs",
         action="store_true",
         help="Download full remote logs instead of tailing",
+    )
+    parser.add_argument(
+        "--submit-only",
+        "--detach",
+        dest="submit_only",
+        action="store_true",
+        help="Submit the Slurm job, print job details, and exit without monitoring",
     )
     parser.add_argument(
         "--dry-run",
@@ -266,11 +311,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         time=args.time,
         gpus=args.gpus,
         conda_env=args.conda_env,
+        runtime_modules=args.runtime_modules,
+        python_executable=args.python,
+        use_conda=False if args.no_conda else None,
         container=args.container,
         no_sync=args.no_sync,
+        stage_data=args.stage_data,
+        link_as=args.link_as,
+        persistent_output=args.persistent_output,
         full_logs=args.full_logs,
+        submit_only=args.submit_only,
         dry_run=args.dry_run,
-        sync_free_space_margin=args.sync_free_space_margin,
     )
 
 

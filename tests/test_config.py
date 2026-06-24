@@ -31,6 +31,7 @@ class DummyArgs:
     time = None
     conda_module = None
     python_module = None
+    python = None
     poll_interval = None
     pending_timeout = None
     max_ssh_retries = None
@@ -149,6 +150,22 @@ def test_default_sync_free_space_margin():
     assert DEFAULTS["sync_free_space_margin"] == 1.1
     cfg = Config(**DEFAULTS)
     assert cfg.sync_free_space_margin == 1.1
+
+
+def test_default_runtime_options():
+    cfg = Config(**DEFAULTS)
+    assert cfg.runtime_modules == []
+    assert cfg.python_executable == "python"
+    assert cfg.use_conda is True
+    assert cfg.data_mounts == []
+    assert cfg.persistent_outputs == []
+
+
+def test_cli_override_python_executable():
+    args = DummyArgs()
+    args.python = "python3"
+    cfg = build_config_from_args(args)
+    assert cfg.python_executable == "python3"
 
 
 def test_env_override_sync_free_space_margin(monkeypatch):

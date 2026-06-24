@@ -95,6 +95,28 @@ def test_integrity_mismatch(project_dir: Path, fake_ssh, rsync_success, tmp_path
         sync.sync()
 
 
+def test_integrity_mismatch_lists_remote_extra_files(
+    project_dir: Path, fake_ssh, rsync_success, tmp_path: Path
+):
+    remote = tmp_path / "remote" / "sample_project"
+    (remote / "output").mkdir(parents=True)
+    (remote / "output" / "old_state.json").write_text("{}", encoding="utf-8")
+    sync = CodeSync(
+        ssh=fake_ssh,
+        local_dir=str(project_dir),
+        remote_dir=str(remote),
+        excludes=["output"],
+        rsync_cmd=rsync_success,
+    )
+    with pytest.raises(SyncIntegrityError) as exc_info:
+        sync.sync()
+
+    message = str(exc_info.value)
+    assert "Remote extra files:" in message
+    assert "output/old_state.json" in message
+    assert "sync_excludes" in message
+
+
 def test_disk_space_progress_message(project_dir: Path, fake_ssh):
     fake_ssh.set_response(
         "df -B1 -P",

@@ -25,6 +25,52 @@ def test_parse_args_with_options():
     assert args.command == ["python", "train.py"]
 
 
+def test_parse_args_submit_only():
+    args = parse_args(["--submit-only", "python", "main.py"])
+    assert args.submit_only is True
+    assert args.command == ["python", "main.py"]
+
+
+def test_parse_args_detach_alias():
+    args = parse_args(["--detach", "python", "main.py"])
+    assert args.submit_only is True
+    assert args.command == ["python", "main.py"]
+
+
+def test_parse_args_runtime_options():
+    args = parse_args([
+        "--module", "lang/Python/3.11",
+        "--module", "tools/Apptainer",
+        "--python", "python3",
+        "--no-conda",
+        "python", "main.py",
+    ])
+    assert args.runtime_modules == ["lang/Python/3.11", "tools/Apptainer"]
+    assert args.python == "python3"
+    assert args.no_conda is True
+    assert args.command == ["python", "main.py"]
+
+
+def test_parse_args_stage_data_options():
+    args = parse_args([
+        "--stage-data", "output/dataset:~/hpc_datasets/project/dataset",
+        "--link-as", "output/dataset",
+        "python", "main.py",
+    ])
+    assert args.stage_data == ["output/dataset:~/hpc_datasets/project/dataset"]
+    assert args.link_as == ["output/dataset"]
+    assert args.command == ["python", "main.py"]
+
+
+def test_parse_args_persistent_output_options():
+    args = parse_args([
+        "--persistent-output", "output/run:~/hpc_run_state/project/run",
+        "python", "main.py",
+    ])
+    assert args.persistent_output == ["output/run:~/hpc_run_state/project/run"]
+    assert args.command == ["python", "main.py"]
+
+
 def test_parse_args_no_command():
     with pytest.raises(SystemExit):
         parse_args([])
@@ -98,6 +144,109 @@ def test_cli_dry_run(project_dir, tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert calls
     assert calls[0]["dry_run"] is True
+
+
+def test_cli_submit_only_passed_to_pipeline(project_dir, monkeypatch):
+    from ulhpc_submit import main as main_module
+
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "SubmissionPipeline", FakePipeline)
+
+    rc = main([
+        "--local-dir", str(project_dir),
+        "--user", "testuser",
+        "--submit-only",
+        "python", "main.py",
+    ])
+    assert rc == 0
+    assert calls
+    assert calls[0]["submit_only"] is True
+
+
+def test_cli_runtime_options_passed_to_pipeline(project_dir, monkeypatch):
+    from ulhpc_submit import main as main_module
+
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "SubmissionPipeline", FakePipeline)
+
+    rc = main([
+        "--local-dir", str(project_dir),
+        "--user", "testuser",
+        "--module", "lang/Python/3.11",
+        "--python", "python3",
+        "--no-conda",
+        "python", "main.py",
+    ])
+    assert rc == 0
+    assert calls[0]["runtime_modules"] == ["lang/Python/3.11"]
+    assert calls[0]["python_executable"] == "python3"
+    assert calls[0]["use_conda"] is False
+
+
+def test_cli_stage_data_passed_to_pipeline(project_dir, monkeypatch):
+    from ulhpc_submit import main as main_module
+
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "SubmissionPipeline", FakePipeline)
+
+    rc = main([
+        "--local-dir", str(project_dir),
+        "--user", "testuser",
+        "--stage-data", "output/dataset:~/hpc_datasets/project/dataset",
+        "--link-as", "output/dataset",
+        "python", "main.py",
+    ])
+    assert rc == 0
+    assert calls[0]["stage_data"] == ["output/dataset:~/hpc_datasets/project/dataset"]
+    assert calls[0]["link_as"] == ["output/dataset"]
+
+
+def test_cli_persistent_output_passed_to_pipeline(project_dir, monkeypatch):
+    from ulhpc_submit import main as main_module
+
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "SubmissionPipeline", FakePipeline)
+
+    rc = main([
+        "--local-dir", str(project_dir),
+        "--user", "testuser",
+        "--persistent-output", "output/run:~/hpc_run_state/project/run",
+        "python", "main.py",
+    ])
+    assert rc == 0
+    assert calls[0]["persistent_output"] == ["output/run:~/hpc_run_state/project/run"]
 
 
 def test_cli_rejects_placeholder_user(capsys, monkeypatch, tmp_path):

@@ -35,6 +35,9 @@ class JobScriptBuilder:
         gpus: Optional[int] = None,
         conda_env: Optional[str] = None,
         container: Optional[str] = None,
+        runtime_modules: Optional[List[str]] = None,
+        python_executable: Optional[str] = None,
+        use_conda: Optional[bool] = None,
     ):
         self.config = config
         self.command = command
@@ -45,6 +48,9 @@ class JobScriptBuilder:
             conda_module=config.conda_module,
             python_module=config.python_module,
             conda_env=conda_env,
+            runtime_modules=runtime_modules if runtime_modules is not None else config.runtime_modules,
+            python_executable=python_executable or config.python_executable,
+            use_conda=config.use_conda if use_conda is None else use_conda,
         )
         self.job_name = job_name or self.project_dir.name or "ulhpc_job"
         self.partition = partition or config.default_partition
@@ -55,16 +61,27 @@ class JobScriptBuilder:
         self.time = time or config.default_time
         self.gpus = gpus or 0
         self.container = container
+        self.python_executable = python_executable or config.python_executable
+
+    def _command_for_runtime(self) -> List[str]:
+        """Apply runtime-level command rewrites without changing user args."""
+        if not self.command:
+            return []
+        first = Path(str(self.command[0])).name
+        if self.python_executable and first in {"python", "python3"}:
+            return [self.python_executable, *self.command[1:]]
+        return self.command
 
     def build(self) -> str:
         """Return the full Slurm script as a string."""
         now = datetime.now().isoformat(timespec="seconds")
-        user_cmd = " ".join(shlex.quote(str(arg)) for arg in self.command)
+        runtime_command = self._command_for_runtime()
+        user_cmd = " ".join(shlex.quote(str(arg)) for arg in runtime_command)
 
         if self.container:
             env_block = self._container_block()
             # If the user already provided a full apptainer command, run it as-is.
-            if self.command and self.command[0] in ("apptainer", "singularity"):
+            if runtime_command and runtime_command[0] in ("apptainer", "singularity"):
                 wrapped_cmd = user_cmd
             else:
                 wrapped_cmd = f"apptainer exec {shlex.quote(self.container)} {user_cmd}"

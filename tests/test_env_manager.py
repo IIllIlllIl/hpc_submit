@@ -46,6 +46,21 @@ def test_build_env_block_warns_on_pip_fallback(project_dir: Path):
     assert "module load lang/Python/3.11" in block
 
 
+def test_build_env_block_no_conda_with_runtime_modules(project_dir: Path):
+    em = EnvironmentManager(
+        str(project_dir),
+        runtime_modules=["lang/Python/3.11", "tools/Apptainer"],
+        python_executable="python3",
+        use_conda=False,
+    )
+    block = em.build_env_block()
+    assert "module load lang/Python/3.11" in block
+    assert "module load tools/Apptainer" in block
+    assert "module load miniconda3" not in block
+    assert "conda activate" not in block
+    assert "python3 -m pip install --user -r requirements.txt" in block
+
+
 def test_empty_requirements_file(project_dir: Path):
     (project_dir / "requirements.txt").write_text("", encoding="utf-8")
     em = EnvironmentManager(str(project_dir))

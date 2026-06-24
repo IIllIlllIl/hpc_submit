@@ -184,12 +184,19 @@ class CodeSync:
         return any(fnmatch.fnmatch(name, pattern) for pattern in self.excludes)
 
     def _count_local_files(self) -> int:
-        count = 0
-        for root, dirs, files in os.walk(self.local_dir):
+        return len(self._list_local_files())
+
+    def _list_local_files(self) -> List[str]:
+        files: List[str] = []
+        for root, dirs, filenames in os.walk(self.local_dir):
             # Do not descend into excluded directories.
             dirs[:] = [d for d in dirs if not self._is_excluded(d)]
-            count += sum(1 for f in files if not self._is_excluded(f))
-        return count
+            for filename in filenames:
+                if self._is_excluded(filename):
+                    continue
+                path = Path(root) / filename
+                files.append(path.relative_to(self.local_dir).as_posix())
+        return sorted(files)
 
     def _count_remote_files(self) -> int:
         cmd = f"find {shlex.quote(self.remote_dir)} -type f | wc -l"
@@ -204,6 +211,39 @@ class CodeSync:
             raise SyncIntegrityError(
                 f"Unexpected remote file count output: {out!r}"
             ) from exc
+
+    def _list_remote_files(self) -> List[str]:
+        quoted = shlex.quote(self.remote_dir)
+        cmd = f"cd {quoted} && find . -type f -print | sed 's#^./##' | sort"
+        rc, out, err = self.ssh.exec_command(cmd)
+        if rc != 0:
+            raise SyncIntegrityError(
+                f"Could not list remote files for integrity check: {err.strip()}"
+            )
+        return [line.strip() for line in out.splitlines() if line.strip()]
+
+    def _integrity_mismatch_message(self, local_count: int, remote_count: int) -> str:
+        local_files = set(self._list_local_files())
+        remote_files = set(self._list_remote_files())
+        extra = sorted(remote_files - local_files)
+        missing = sorted(local_files - remote_files)
+
+        parts = [
+            f"File count mismatch after sync: local={local_count}, remote={remote_count}."
+        ]
+        if extra:
+            shown = ", ".join(extra[:20])
+            suffix = f" (+{len(extra) - 20} more)" if len(extra) > 20 else ""
+            parts.append(f"Remote extra files: {shown}{suffix}.")
+        if missing:
+            shown = ", ".join(missing[:20])
+            suffix = f" (+{len(missing) - 20} more)" if len(missing) > 20 else ""
+            parts.append(f"Missing remote files: {shown}{suffix}.")
+        if extra and self.excludes:
+            parts.append(
+                "Remote extra files may be leftovers from paths excluded by sync_excludes."
+            )
+        return " ".join(parts)
 
     def sync(self) -> None:
         """Run full sync with checks.
@@ -263,7 +303,7 @@ class CodeSync:
         remote_count = self._count_remote_files()
         if remote_count != local_count:
             raise SyncIntegrityError(
-                f"File count mismatch after sync: local={local_count}, remote={remote_count}."
+                self._integrity_mismatch_message(local_count, remote_count)
             )
 
     def sync_dry_run(self) -> str:
