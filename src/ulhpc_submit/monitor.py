@@ -65,7 +65,7 @@ class JobMonitor:
         parts = out.strip().split(None, 3)
         if len(parts) < 4:
             return None
-        state, elapsed, time_limit, reason = parts
+        state, elapsed, _time_limit, reason = parts
         state = state.strip('"')
         reason = reason.strip('"')
         return JobStateEvent(

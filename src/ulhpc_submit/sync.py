@@ -228,13 +228,6 @@ class CodeSync:
             )
         return [line.strip() for line in out.splitlines() if line.strip()]
 
-    def _integrity_mismatch_message(self, local_count: int, remote_count: int) -> str:
-        local_files = set(self._list_local_files())
-        remote_files = set(self._list_remote_files())
-        extra = sorted(remote_files - local_files)
-        missing = sorted(local_files - remote_files)
-        return self._format_integrity_mismatch(local_count, remote_count, extra, missing)
-
     def _format_integrity_mismatch(
         self,
         local_count: int,

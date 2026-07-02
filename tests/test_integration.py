@@ -48,9 +48,6 @@ def test_full_pipeline_success(project_dir: Path, tmp_path: Path):
 
     import ulhpc_submit.main as main_module
     import ulhpc_submit.sync as sync_module
-    import ulhpc_submit.job_manager as jm_module
-    import ulhpc_submit.monitor as mon_module
-    import ulhpc_submit.logs as logs_module
 
     monkeypatch = None  # we can't use fixture here; set class refs manually
     # Use direct monkeypatching of the class references used to instantiate.
