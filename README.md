@@ -186,6 +186,25 @@ After submission, `ulhpc-submit` polls the job state. If the job remains `PENDIN
 
 Use `--full-logs` to download the complete remote output files instead of tailing the last 500 lines.
 
+## FairShare and usage
+
+ULHPC scheduling uses Slurm FairShare/Fair Tree accounting: recent resource usage is part of job priority, and a higher FairShare factor usually means better queue priority. See the official ULHPC Fairsharing documentation: https://hpc-docs.uni.lu/slurm/fairsharing/
+
+Summarize your current FairShare and recent accounting usage:
+
+```bash
+ulhpc-submit usage
+ulhpc-submit usage --days 14
+```
+
+Inspect one job's accounting record:
+
+```bash
+ulhpc-submit usage --job-id 123456
+```
+
+The command runs `ulhpcshare -u <user>` and `sacct` on the access node, then prints a compact summary with job counts, state mix, allocated core-hours, rough CPU efficiency, top partitions, and practical hints when recent failures or low CPU efficiency may be hurting usage quality.
+
 ## Platform Support
 
 `ulhpc-submit` is designed to submit jobs to the UL HPC **Iris** Slurm cluster, which is a Linux environment. The local machine must be able to run `ssh` and `rsync`.

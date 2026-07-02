@@ -674,3 +674,120 @@ def test_cli_sync_free_space_margin_merged_into_config(monkeypatch, tmp_path):
     assert rc == 0
     assert len(calls) == 1
     assert calls[0].sync_free_space_margin == 2.0
+
+
+def test_cli_usage_success(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    commands = []
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            pass
+
+        def exec_command(self, command):
+            commands.append(command)
+            if command.startswith("ulhpcshare"):
+                return (
+                    0,
+                    "Account User RawShares NormShares EffectvUsage FairShare\n"
+                    "abc testuser 1 0.5 0.2 0.812345\n",
+                    "",
+                )
+            if command.startswith("sacct"):
+                return (
+                    0,
+                    "123|train|batch|COMPLETED|01:00:00|4|03:00:00|8G|2G\n"
+                    "124|eval|gpu|FAILED|00:30:00|2|00:05:00|16G|4G\n",
+                    "",
+                )
+            return 1, "", "unexpected"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main(["usage", "--user", "testuser", "--days", "7"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "FairShare: 0.812345" in captured.out
+    assert "Recent jobs: 2" in captured.out
+    assert "allocated core-hours: 5.00" in captured.out
+    assert "ulhpcshare -u testuser" in commands
+    assert any(
+        command.startswith("sacct -u testuser --starttime=now-7days")
+        for command in commands
+    )
+
+
+def test_cli_usage_job_id_success(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    commands = []
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            pass
+
+        def exec_command(self, command):
+            commands.append(command)
+            if command.startswith("ulhpcshare"):
+                return 0, "", ""
+            if command.startswith("sacct -j"):
+                return 0, "123|train|batch|COMPLETED|00:10:00|1|00:09:00|4G|1G\n", ""
+            return 1, "", "unexpected"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main(["usage", "--user", "testuser", "--job-id", "123"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "Job: 123" in captured.out
+    assert "Memory: requested 4G; max RSS 1G" in captured.out
+    assert any(command.startswith("sacct -j 123") for command in commands)
+
+
+def test_cli_usage_rejects_unsafe_job_id(capsys):
+    rc = main(["usage", "--user", "testuser", "--job-id", "../secret"])
+
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "usage --job-id must be a Slurm job id" in captured.err
+
+
+def test_cli_usage_quotes_remote_command_inputs(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    commands = []
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            pass
+
+        def exec_command(self, command):
+            commands.append(command)
+            return 0, "", ""
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main(["usage", "--user", "bad user;touch x"])
+
+    assert rc == 0
+    joined = "\n".join(commands)
+    assert "ulhpcshare -u 'bad user;touch x'" in joined
+    assert "sacct -u 'bad user;touch x'" in joined

@@ -24,6 +24,7 @@ from .errors import ConfigError, SyncNetworkError
 from .logs import LogManager, create_run_logger
 from .main import submit_hpc_task
 from .ssh_client import SSHClient
+from .usage import collect_usage_summary, summarize_usage
 
 
 JOB_ID_RE = re.compile(r"^[0-9]+(?:_[0-9]+)?$")
@@ -45,6 +46,9 @@ examples:
 
   # Inspect the merged configuration
   ulhpc-submit --show-config
+
+  # Summarize FairShare and recent accounting usage
+  ulhpc-submit usage --days 30
 
 configuration:
   Values are resolved in this order:
@@ -375,6 +379,25 @@ def parse_fetch_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def parse_usage_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="ulhpc-submit usage",
+        description="Summarize ULHPC FairShare and recent Slurm accounting usage.",
+    )
+    _add_connection_args(parser)
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Recent accounting window in days (default: 30)",
+    )
+    parser.add_argument(
+        "--job-id",
+        help="Show accounting details for one Slurm job instead of the recent window",
+    )
+    return parser.parse_args(argv)
+
+
 def _run_doctor(argv: Optional[List[str]] = None) -> int:
     args = parse_doctor_args(argv)
     config = build_config_from_args(args, warn_missing=True)
@@ -422,6 +445,46 @@ def _run_doctor(argv: Optional[List[str]] = None) -> int:
             return 1
         print(f"[ulhpc-submit] Partition visible: {partition}")
         return 0
+    except SyncNetworkError as exc:
+        print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+        return 2
+    finally:
+        ssh.close()
+
+
+def _run_usage(argv: Optional[List[str]] = None) -> int:
+    args = parse_usage_args(argv)
+    if args.days < 1:
+        print("[ulhpc-submit] ERROR usage --days must be >= 1", file=sys.stderr)
+        return 2
+    if args.job_id and not JOB_ID_RE.match(args.job_id):
+        print("[ulhpc-submit] ERROR usage --job-id must be a Slurm job id, e.g. 123456", file=sys.stderr)
+        return 2
+    config = build_config_from_args(args, warn_missing=True)
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+        return 2
+
+    ssh = SSHClient(
+        host=config.host,
+        port=config.port,
+        user=config.user,
+        key_path=config.ssh_key,
+        key_passphrase=config.ssh_key_passphrase,
+        max_retries=config.max_ssh_retries,
+    )
+    try:
+        ssh.connect()
+        summary = collect_usage_summary(
+            ssh,
+            user=config.user,
+            days=args.days,
+            job_id=args.job_id,
+        )
+        print(summarize_usage(summary, job_id=args.job_id))
+        return 0 if not summary.sacct_error else 1
     except SyncNetworkError as exc:
         print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
         return 2
@@ -481,6 +544,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_doctor(argv[1:])
     if argv and argv[0] == "fetch":
         return _run_fetch(argv[1:])
+    if argv and argv[0] == "usage":
+        return _run_usage(argv[1:])
     if argv and argv[0] == "config-schema":
         print(yaml.safe_dump(_config_schema(), sort_keys=False, default_flow_style=False).rstrip())
         return 0
