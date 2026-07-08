@@ -44,6 +44,7 @@ class JobScriptBuilder:
         pre_run_command: Optional[str] = None,
         post_run_command: Optional[str] = None,
         on_failure_command: Optional[str] = None,
+        command_timeout: Optional[str] = None,
     ):
         self.config = config
         self.command = command
@@ -76,6 +77,7 @@ class JobScriptBuilder:
         self.pre_run_command = pre_run_command
         self.post_run_command = post_run_command
         self.on_failure_command = on_failure_command
+        self.command_timeout = command_timeout
 
     def _command_for_runtime(self) -> List[str]:
         """Apply runtime-level command rewrites without changing user args."""
@@ -102,6 +104,9 @@ class JobScriptBuilder:
         else:
             env_block = self.env_manager.build_env_block()
             wrapped_cmd = user_cmd
+
+        if self.command_timeout:
+            wrapped_cmd = f"timeout {shlex.quote(self.command_timeout)} {wrapped_cmd}"
 
         lines: List[str] = [
             "#!/bin/bash -l",
@@ -154,6 +159,13 @@ class JobScriptBuilder:
                 "if [ \"$exit_code\" -ne 0 ]; then",
                 '    echo "[ulhpc-submit] running on-failure hook"',
                 f"    {self.on_failure_command}",
+                "fi",
+            ])
+
+        if self.command_timeout:
+            lines.extend([
+                "if [ \"$exit_code\" -eq 124 ]; then",
+                f'    echo "[ulhpc-submit] command timed out after {self.command_timeout}" >&2',
                 "fi",
             ])
 

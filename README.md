@@ -85,6 +85,8 @@ ulhpc-submit --show-config --explain
 ulhpc-submit config-schema
 ```
 
+`config-schema` is the authoritative list of supported YAML fields, defaults, and matching environment variables.
+
 ### Need help?
 
 If you have questions about UL HPC, you can log in with your UL account to the [UL HPC GPT assistant](https://webapp-unilux-unigpt-prd-we.azurewebsites.net/) and ask HPC-related questions.
@@ -129,6 +131,39 @@ ulhpc-submit --container ~/images/myenv.sif \
   --apptainer-tmp-dir /scratch/$USER/apptainer-tmp \
   --apptainer-sif-cache-dir /scratch/$USER/sif-cache \
   python main.py
+```
+
+## Data staging and persistent outputs
+
+Keep large datasets outside the synced project tree and link them back into the remote workdir before the job starts:
+
+```bash
+ulhpc-submit \
+  --stage-data output/dataset:~/hpc_datasets/my_project/dataset \
+  --link-as output/dataset \
+  python main.py
+```
+
+Each `--link-as` entry corresponds to the matching `--stage-data` entry. The local staged path must be a directory.
+
+For run state or output directories that should survive across jobs, link a project path to a persistent remote directory:
+
+```bash
+ulhpc-submit \
+  --persistent-output output/run:~/hpc_run_state/my_project/run \
+  python main.py
+```
+
+The same features can be configured in YAML:
+
+```yaml
+data_mounts:
+  - local: output/dataset
+    remote: ~/hpc_datasets/my_project/dataset
+    link_as: output/dataset
+persistent_outputs:
+  - project_path: output/run
+    remote: ~/hpc_run_state/my_project/run
 ```
 
 ## Dry-run
@@ -204,6 +239,24 @@ ulhpc-submit usage --job-id 123456
 ```
 
 The command runs `ulhpcshare -u <user>` and `sacct` on the access node, then prints a compact summary with job counts, state mix, allocated core-hours, rough CPU efficiency, top partitions, and practical hints when recent failures or low CPU efficiency may be hurting usage quality.
+
+## Quick-test workflow
+
+Use `quick-test` to reduce wasted allocation and FairShare impact before a long production run:
+
+```bash
+# Short environment smoke test
+ulhpc-submit quick-test smoke -- python -c "import torch; print('ok')"
+
+# Short resource calibration run
+ulhpc-submit quick-test calibrate --duration 10m -- python train.py --max-steps 100
+```
+
+The smoke test submits a very short Slurm job and wraps the user command with an in-job timeout, so environment, modules, containers, imports, and entrypoints fail quickly instead of leaving a broken long job idle. Defaults: command timeout `10s`, Slurm time `00:01:00`.
+
+The calibration test runs a representative short workload, then inspects Slurm accounting (`Elapsed`, `AllocCPUS`, `TotalCPU`, `ReqMem`, `MaxRSS`) to report CPU efficiency, allocated core-hours, memory headroom, and resource-sizing suggestions for the production command. Defaults: command timeout `10m`, Slurm time `00:11:00` so the in-job timeout can fire before the scheduler walltime.
+
+Quick-test reuses the normal submission options, including `--module`, `--container`, `--stage-data`, `--persistent-output`, and `--json`. With `--json`, the pipeline JSON remains on stdout and quick-test's human-readable analysis is printed to stderr. Quick-test does not automatically rewrite the resource settings for your production run, and the calibration result is only as representative as the short command you provide.
 
 ## Platform Support
 

@@ -5,7 +5,7 @@ import re
 import shlex
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import yaml
 
@@ -22,12 +22,30 @@ from .config import (
 )
 from .errors import ConfigError, SyncNetworkError
 from .logs import LogManager, create_run_logger
-from .main import submit_hpc_task
+from .main import SubmissionPipeline, submit_hpc_task
+from .quick_test import calibration_lines
 from .ssh_client import SSHClient
 from .usage import collect_usage_summary, summarize_usage
 
 
 JOB_ID_RE = re.compile(r"^[0-9]+(?:_[0-9]+)?$")
+TIMEOUT_RE = re.compile(r"^[1-9][0-9]*[smhd]?$")
+
+
+def _timeout_seconds(value: str) -> int:
+    suffix = value[-1] if value[-1].isalpha() else "s"
+    number = int(value[:-1] if value[-1].isalpha() else value)
+    factors = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return number * factors[suffix]
+
+
+def _slurm_time_from_seconds(seconds: int) -> str:
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if days:
+        return f"{days}-{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 HELP_EPILOG = """
@@ -49,6 +67,9 @@ examples:
 
   # Summarize FairShare and recent accounting usage
   ulhpc-submit usage --days 30
+
+  # Short smoke test before a long production run
+  ulhpc-submit quick-test smoke -- python -c "print('ok')"
 
 configuration:
   Values are resolved in this order:
@@ -398,6 +419,67 @@ def parse_usage_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def parse_quick_test_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="ulhpc-submit quick-test",
+        description="Run a short Slurm smoke test or resource calibration run.",
+    )
+    parser.add_argument("mode", choices=["smoke", "calibrate"])
+    parser.add_argument(
+        "--command-timeout",
+        default=None,
+        help="In-job timeout for the user command, e.g. 10s or 10m",
+    )
+    parser.add_argument(
+        "--duration",
+        default="10m",
+        help="Calibration command timeout duration (default: 10m)",
+    )
+    parser.add_argument(
+        "--cpu-efficiency-threshold",
+        type=float,
+        default=0.5,
+        help="Calibration threshold for low CPU efficiency hints (default: 0.5)",
+    )
+    parser.add_argument(
+        "--memory-headroom-threshold",
+        type=float,
+        default=0.25,
+        help="Reserved for calibration memory sizing hints (default: 0.25)",
+    )
+    raw = list(argv or [])
+    help_part = raw[: raw.index("--")] if "--" in raw else raw
+    if any(arg in ("-h", "--help") for arg in help_part):
+        parser.parse_args(help_part)
+    if "--" not in raw:
+        parser.error("quick-test requires '-- COMMAND' so quick-test options are not confused with user command options")
+    sep = raw.index("--")
+    quick_part = raw[:sep]
+    command_part = raw[sep + 1:]
+    args, submit_part = parser.parse_known_args(quick_part)
+    if not command_part:
+        parser.error("quick-test requires a command after '--'")
+
+    command_timeout = args.command_timeout
+    if args.mode == "smoke":
+        command_timeout = command_timeout or "10s"
+    else:
+        command_timeout = command_timeout or args.duration
+    if not TIMEOUT_RE.match(command_timeout):
+        parser.error("--command-timeout must look like 10s, 10m, 2h, or 1d")
+    if args.mode == "calibrate" and not TIMEOUT_RE.match(args.duration):
+        parser.error("--duration must look like 10m, 2h, or 1d")
+    args.command_timeout = command_timeout
+
+    submit_args = parse_args(submit_part + ["--"] + command_part)
+    if args.mode == "smoke" and submit_args.time is None:
+        submit_args.time = "00:01:00"
+    if args.mode == "calibrate" and submit_args.time is None:
+        submit_args.time = _slurm_time_from_seconds(_timeout_seconds(command_timeout) + 60)
+    args.submit_args = submit_args
+    return args
+
+
 def _run_doctor(argv: Optional[List[str]] = None) -> int:
     args = parse_doctor_args(argv)
     config = build_config_from_args(args, warn_missing=True)
@@ -492,6 +574,142 @@ def _run_usage(argv: Optional[List[str]] = None) -> int:
         ssh.close()
 
 
+def _submission_kwargs(args: argparse.Namespace) -> dict:
+    return {
+        "command": args.command,
+        "remote_dir": args.remote_dir,
+        "job_name": args.job_name,
+        "partition": args.partition,
+        "nodes": args.nodes,
+        "ntasks": args.ntasks,
+        "cpus": args.cpus,
+        "mem": args.mem,
+        "time": args.time,
+        "gpus": args.gpus,
+        "conda_env": args.conda_env,
+        "runtime_modules": args.runtime_modules,
+        "python_executable": args.python,
+        "use_conda": False if args.no_conda else None,
+        "container": args.container,
+        "apptainer_cache_dir": args.apptainer_cache_dir,
+        "apptainer_tmp_dir": args.apptainer_tmp_dir,
+        "apptainer_sif_cache_dir": args.apptainer_sif_cache_dir,
+        "no_sync": args.no_sync,
+        "stage_data": args.stage_data,
+        "link_as": args.link_as,
+        "persistent_output": args.persistent_output,
+        "sync_remote_extra_policy": args.sync_remote_extra_policy,
+        "pre_sync_command": args.pre_sync_command,
+        "pre_run_command": args.pre_run_command,
+        "post_run_command": args.post_run_command,
+        "on_failure_command": args.on_failure_command,
+        "full_logs": args.full_logs,
+        "submit_only": args.submit_only,
+        "dry_run": args.dry_run,
+        "json_output": args.json_output,
+    }
+
+
+def _build_validated_submission(
+    argv_args: argparse.Namespace,
+) -> Tuple[Optional[Config], Optional[Path]]:
+    config = build_config_from_args(argv_args, warn_missing=True)
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+        return None, None
+
+    local_dir = Path(argv_args.local_dir).resolve()
+    if not local_dir.is_dir():
+        print(f"[ulhpc-submit] ERROR local directory does not exist: {local_dir}", file=sys.stderr)
+        return None, None
+    return config, local_dir
+
+
+def _run_quick_test(argv: Optional[List[str]] = None) -> int:
+    quick_args = parse_quick_test_args(argv)
+    submit_args = quick_args.submit_args
+    config, local_dir = _build_validated_submission(submit_args)
+    if config is None or local_dir is None:
+        return 2
+
+    kwargs = _submission_kwargs(submit_args)
+    kwargs["command_timeout"] = quick_args.command_timeout
+    pipeline = SubmissionPipeline(
+        config=config,
+        local_dir=str(local_dir),
+        **kwargs,
+    )
+    rc = pipeline.run()
+
+    timed_out = False
+    if pipeline.logger and pipeline.logger.log_file.exists():
+        log_text = pipeline.logger.log_file.read_text(encoding="utf-8", errors="replace")
+        timed_out = "command timed out after" in log_text
+    extra_output = sys.stderr if submit_args.json_output else sys.stdout
+
+    if quick_args.mode == "smoke":
+        if timed_out:
+            print(
+                f"[ulhpc-submit] Quick smoke test timed out after {quick_args.command_timeout}; "
+                "environment may start, but the smoke command did not finish.",
+                file=extra_output,
+            )
+            return 1
+        if rc == 0:
+            print(
+                "[ulhpc-submit] Quick smoke test passed: environment and command started successfully.",
+                file=extra_output,
+            )
+        else:
+            print("[ulhpc-submit] Quick smoke test failed.", file=extra_output)
+        return rc
+
+    if pipeline.job_id:
+        ssh = SSHClient(
+            host=config.host,
+            port=config.port,
+            user=config.user,
+            key_path=config.ssh_key,
+            key_passphrase=config.ssh_key_passphrase,
+            max_retries=config.max_ssh_retries,
+        )
+        try:
+            ssh.connect()
+            summary = collect_usage_summary(
+                ssh,
+                user=config.user,
+                days=1,
+                job_id=pipeline.job_id,
+            )
+            print(summarize_usage(summary, job_id=pipeline.job_id), file=extra_output)
+            if summary.jobs:
+                print(
+                    "\n".join(
+                        calibration_lines(
+                            summary.jobs[0],
+                            cpu_efficiency_threshold=quick_args.cpu_efficiency_threshold,
+                            memory_headroom_threshold=quick_args.memory_headroom_threshold,
+                        )
+                    ),
+                    file=extra_output,
+                )
+        except SyncNetworkError as exc:
+            print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
+            return 2
+        finally:
+            ssh.close()
+    if timed_out:
+        print(
+            f"[ulhpc-submit] Calibration command timed out after {quick_args.command_timeout}; "
+            "use a shorter representative workload or increase --duration.",
+            file=extra_output,
+        )
+        return 1
+    return rc
+
+
 def _run_fetch(argv: Optional[List[str]] = None) -> int:
     args = parse_fetch_args(argv)
     config = build_config_from_args(args, warn_missing=True)
@@ -546,6 +764,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _run_fetch(argv[1:])
     if argv and argv[0] == "usage":
         return _run_usage(argv[1:])
+    if argv and argv[0] == "quick-test":
+        return _run_quick_test(argv[1:])
     if argv and argv[0] == "config-schema":
         print(yaml.safe_dump(_config_schema(), sort_keys=False, default_flow_style=False).rstrip())
         return 0
@@ -594,54 +814,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
             return 2
 
-    config = build_config_from_args(args, warn_missing=True)
-
-    try:
-        validate_config(config)
-    except ConfigError as exc:
-        print(f"[ulhpc-submit] ERROR {exc}", file=sys.stderr)
-        return 2
-
-    # Resolve local directory
-    local_dir = Path(args.local_dir).resolve()
-    if not local_dir.is_dir():
-        print(f"[ulhpc-submit] ERROR local directory does not exist: {local_dir}", file=sys.stderr)
+    config, local_dir = _build_validated_submission(args)
+    if config is None or local_dir is None:
         return 2
 
     return submit_hpc_task(
         config=config,
-        command=args.command,
         local_dir=str(local_dir),
-        remote_dir=args.remote_dir,
-        job_name=args.job_name,
-        partition=args.partition,
-        nodes=args.nodes,
-        ntasks=args.ntasks,
-        cpus=args.cpus,
-        mem=args.mem,
-        time=args.time,
-        gpus=args.gpus,
-        conda_env=args.conda_env,
-        runtime_modules=args.runtime_modules,
-        python_executable=args.python,
-        use_conda=False if args.no_conda else None,
-        container=args.container,
-        apptainer_cache_dir=args.apptainer_cache_dir,
-        apptainer_tmp_dir=args.apptainer_tmp_dir,
-        apptainer_sif_cache_dir=args.apptainer_sif_cache_dir,
-        no_sync=args.no_sync,
-        stage_data=args.stage_data,
-        link_as=args.link_as,
-        persistent_output=args.persistent_output,
-        sync_remote_extra_policy=args.sync_remote_extra_policy,
-        pre_sync_command=args.pre_sync_command,
-        pre_run_command=args.pre_run_command,
-        post_run_command=args.post_run_command,
-        on_failure_command=args.on_failure_command,
-        full_logs=args.full_logs,
-        submit_only=args.submit_only,
-        dry_run=args.dry_run,
-        json_output=args.json_output,
+        **_submission_kwargs(args),
     )
 
 

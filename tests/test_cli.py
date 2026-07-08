@@ -791,3 +791,113 @@ def test_cli_usage_quotes_remote_command_inputs(monkeypatch, tmp_path):
     joined = "\n".join(commands)
     assert "ulhpcshare -u 'bad user;touch x'" in joined
     assert "sacct -u 'bad user;touch x'" in joined
+
+
+def test_cli_quick_test_smoke_passes_timeout_to_pipeline(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    calls = []
+
+    class DummyPipeline:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.logger = None
+            self.job_id = "123"
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr("ulhpc_submit.cli.SubmissionPipeline", DummyPipeline)
+
+    rc = main([
+        "quick-test",
+        "smoke",
+        "--command-timeout", "15s",
+        "--local-dir", str(tmp_path),
+        "--user", "testuser",
+        "--",
+        "python", "main.py",
+    ])
+
+    assert rc == 0
+    assert calls
+    assert calls[0]["command_timeout"] == "15s"
+    assert calls[0]["time"] == "00:01:00"
+    assert calls[0]["command"] == ["python", "main.py"]
+    captured = capsys.readouterr()
+    assert "Quick smoke test passed" in captured.out
+
+
+def test_cli_quick_test_rejects_missing_command_separator():
+    with pytest.raises(SystemExit):
+        main(["quick-test", "smoke", "--user", "testuser", "python", "main.py"])
+
+
+def test_cli_quick_test_rejects_unsafe_timeout():
+    with pytest.raises(SystemExit):
+        main([
+            "quick-test",
+            "smoke",
+            "--command-timeout", "10s;touch bad",
+            "--user", "testuser",
+            "--",
+            "python", "main.py",
+        ])
+
+
+def test_cli_quick_test_calibrate_prints_accounting_analysis(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    calls = []
+
+    class DummyPipeline:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.logger = None
+            self.job_id = "456"
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            pass
+
+        def exec_command(self, command):
+            if command.startswith("ulhpcshare"):
+                return 0, "", ""
+            if command.startswith("sacct -j 456"):
+                return (
+                    0,
+                    "456|train|batch|COMPLETED|00:10:00|8|00:20:00|16G|2G\n",
+                    "",
+                )
+            return 1, "", "unexpected"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SubmissionPipeline", DummyPipeline)
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main([
+        "quick-test",
+        "calibrate",
+        "--duration", "10m",
+        "--local-dir", str(tmp_path),
+        "--user", "testuser",
+        "--",
+        "python", "train.py", "--max-steps", "100",
+    ])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "Quick calibration analysis" in captured.out
+    assert "CPU efficiency: 25.0%" in captured.out
+    assert "Memory used/requested: 12.5%" in captured.out
+    assert "requesting fewer CPUs" in captured.out
+    assert calls[0]["command_timeout"] == "10m"
+    assert calls[0]["time"] == "00:11:00"

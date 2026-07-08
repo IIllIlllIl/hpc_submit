@@ -58,6 +58,7 @@ class SubmissionPipeline:
         pre_run_command: Optional[str] = None,
         post_run_command: Optional[str] = None,
         on_failure_command: Optional[str] = None,
+        command_timeout: Optional[str] = None,
         full_logs: bool = False,
         submit_only: bool = False,
         dry_run: bool = False,
@@ -99,6 +100,7 @@ class SubmissionPipeline:
         self.pre_run_command = pre_run_command
         self.post_run_command = post_run_command
         self.on_failure_command = on_failure_command
+        self.command_timeout = command_timeout
         self.full_logs = full_logs
         self.submit_only = submit_only
         self.dry_run = dry_run
@@ -307,6 +309,7 @@ class SubmissionPipeline:
                 "pre_run_command": bool(self.pre_run_command),
                 "post_run_command": bool(self.post_run_command),
                 "on_failure_command": bool(self.on_failure_command),
+                "command_timeout": self.command_timeout,
             }
         )
         return data
@@ -458,6 +461,7 @@ class SubmissionPipeline:
                 pre_run_command=self.pre_run_command,
                 post_run_command=self.post_run_command,
                 on_failure_command=self.on_failure_command,
+                command_timeout=self.command_timeout,
             )
             script_path = builder.write()
             self._announce(f"Generated Slurm script: {script_path}")

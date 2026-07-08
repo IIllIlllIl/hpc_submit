@@ -127,3 +127,17 @@ def test_script_injects_run_hooks(project_dir: Path, tmp_config: Config):
     assert 'echo "[ulhpc-submit] running on-failure hook"' in script
     assert "echo fail" in script
     assert 'if [ "$exit_code" -ne 0 ]; then' in script
+
+
+def test_script_wraps_command_timeout(project_dir: Path, tmp_config: Config):
+    builder = JobScriptBuilder(
+        config=tmp_config,
+        command=["python", "main.py"],
+        project_dir=str(project_dir),
+        remote_dir="~/hpc_runs/sample_project",
+        command_timeout="10s",
+    )
+    script = builder.build()
+    assert "timeout 10s python main.py" in script
+    assert 'if [ "$exit_code" -eq 124 ]; then' in script
+    assert "command timed out after 10s" in script
