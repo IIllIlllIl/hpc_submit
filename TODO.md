@@ -17,8 +17,13 @@ This file tracks deferred items and explicit non-goals after the first quick-tes
 
 - Deeper Slurm resource validation.
   - Status: future work.
-  - Current behavior: `doctor` checks SSH, remote directory writability, module availability, and partition visibility.
+  - Current behavior: `doctor` checks SSH, remote directory writability, module availability when the access node exposes the `module` command, and partition visibility. Compute-node module loading can be validated with quick-test.
   - Possible future scope: validate partition wall-time limits, account/QoS access, GPU availability, and memory limits before submission.
+
+- Slurm accounting availability retry.
+  - Status: future work pending real-cluster validation.
+  - Current behavior: an attached calibration queries `sacct` once after the monitored job finishes.
+  - Possible future scope: retry with a short bounded backoff when the job has completed but its accounting record or step metrics are not visible yet.
 
 ## Non-Goals
 

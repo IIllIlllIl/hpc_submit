@@ -202,6 +202,8 @@ Run fail-fast checks before a full submission:
 ulhpc-submit doctor --user YOUR_USERNAME --module lang/Python/3.11
 ```
 
+`doctor` checks module availability when the access node exposes the environment-modules command. If the access node does not provide `module`, doctor prints a warning and continues with the partition check; use `quick-test smoke` to validate module loading on an allocated compute node.
+
 Fetch logs for an already submitted job:
 
 ```bash
@@ -257,6 +259,8 @@ The smoke test submits a very short Slurm job and wraps the user command with an
 The calibration test runs a representative short workload, then inspects Slurm accounting (`Elapsed`, `AllocCPUS`, `TotalCPU`, `ReqMem`, `MaxRSS`) to report CPU efficiency, allocated core-hours, memory headroom, and resource-sizing suggestions for the production command. Defaults: command timeout `10m`, Slurm time `00:11:00` so the in-job timeout can fire before the scheduler walltime.
 
 Quick-test reuses the normal submission options, including `--module`, `--container`, `--stage-data`, `--persistent-output`, and `--json`. With `--json`, the pipeline JSON remains on stdout and quick-test's human-readable analysis is printed to stderr. Quick-test does not automatically rewrite the resource settings for your production run, and the calibration result is only as representative as the short command you provide.
+
+Calibration analysis requires the CLI to remain attached until the job finishes. If `--submit-only` (or its `--detach` alias) is used, quick-test stops after submission and does not query accounting or print calibration conclusions. Use `ulhpc-submit usage --job-id JOB_ID` later to inspect the completed job.
 
 ## Platform Support
 

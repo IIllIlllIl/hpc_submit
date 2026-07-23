@@ -424,6 +424,43 @@ def test_cli_doctor_success(monkeypatch, tmp_path, capsys):
     assert "Partition visible" in captured.out
 
 
+def test_cli_doctor_warns_and_continues_when_access_node_has_no_module_command(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    commands = []
+
+    class DummySSHClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            pass
+
+        def expand_remote_path(self, path):
+            return path
+
+        def exec_command(self, command):
+            commands.append(command)
+            if command.startswith("module avail"):
+                return 127, "", "bash: module: command not found"
+            return 0, "", ""
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", DummySSHClient)
+
+    rc = main(["doctor", "--user", "testuser", "--module", "lang/Python/3.11"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "WARNING module check skipped on access node" in captured.out
+    assert "use quick-test smoke" in captured.out
+    assert "Partition visible: batch" in captured.out
+    assert any(command.startswith("sinfo -h -p batch") for command in commands)
+
+
 def test_cli_doctor_quotes_remote_command_inputs(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     commands = []
@@ -901,3 +938,66 @@ def test_cli_quick_test_calibrate_prints_accounting_analysis(monkeypatch, tmp_pa
     assert "requesting fewer CPUs" in captured.out
     assert calls[0]["command_timeout"] == "10m"
     assert calls[0]["time"] == "00:11:00"
+
+
+def test_cli_quick_test_calibrate_accepts_submit_mem_option(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    calls = []
+
+    class DummyPipeline:
+        def __init__(self, **kwargs):
+            self.logger = None
+            self.job_id = "456"
+            calls.append(kwargs)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr("ulhpc_submit.cli.SubmissionPipeline", DummyPipeline)
+
+    rc = main([
+        "quick-test",
+        "calibrate",
+        "--local-dir", str(tmp_path),
+        "--user", "testuser",
+        "--mem", "4G",
+        "--submit-only",
+        "--",
+        "python", "pilot.py",
+    ])
+
+    assert rc == 0
+    assert calls[0]["mem"] == "4G"
+
+
+def test_cli_quick_test_submit_only_skips_accounting(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    class DummyPipeline:
+        def __init__(self, **kwargs):
+            self.logger = None
+            self.job_id = "456"
+
+        def run(self):
+            return 0
+
+    class UnexpectedSSHClient:
+        def __init__(self, **kwargs):
+            raise AssertionError("submit-only must not query accounting")
+
+    monkeypatch.setattr("ulhpc_submit.cli.SubmissionPipeline", DummyPipeline)
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", UnexpectedSSHClient)
+
+    rc = main([
+        "quick-test",
+        "calibrate",
+        "--local-dir", str(tmp_path),
+        "--user", "testuser",
+        "--submit-only",
+        "--",
+        "python", "pilot.py",
+    ])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "Quick calibration analysis" not in captured.out

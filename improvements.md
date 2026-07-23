@@ -12,7 +12,7 @@
 当前实现状态摘要：
 
 - 已实现：submit-only/detach、外部数据 staging、persistent output symlink、sync extra file 诊断与策略、module/system Python runtime、doctor、Apptainer cache/tmp/SIF 参数、增强 dry-run、fetch、hooks、manifest、JSON submit result、FairShare usage summary、quick-test smoke/calibrate 初版。
-- 部分实现：doctor 只做 SSH、远端目录可写、module、partition 可见性检查；尚未完整校验 partition 最大 wall time、account 权限、mem/gpu 合法性。
+- 部分实现：doctor 做 SSH、远端目录可写、access node 可用时的 module 检查、partition 可见性检查；若 access node 不提供 `module`，会警告并建议用 quick-test 在 compute node 验证。尚未完整校验 partition 最大 wall time、account 权限、mem/gpu 合法性。
 - 未实现：quick-test GPU utilization、`--stage-data-mode`、`--stage-outside-project`、`--retrieve-output`、`--resume-output`、`ulhpc-submit validate`、`--remote-git-status`、按 Slurm 结束原因细分 hooks。
 - 明确不做：quick-test 自动资源搜索、自动改写正式任务资源参数；工具只提供 utilization report 和建议，最终参数由执行人决定。
 
@@ -161,7 +161,7 @@ ulhpc-submit validate --time 2-00:00:00 --partition batch
 
 - 在正式提交前 fail fast，避免进入较长 Paramiko retry 或 Slurm 提交后才发现问题。
 
-状态：已实现 `ulhpc-submit doctor`，包含 SSH、远端目录可写、module 可用、partition 可见性检查。未实现独立 `ulhpc-submit validate`；资源限制深度校验仍是后续项。
+状态：已实现 `ulhpc-submit doctor`，包含 SSH、远端目录可写、access node 可用时的 module 检查、partition 可见性检查。若 access node 不提供 `module` 命令，doctor 会警告并继续，compute node module 由 quick-test 验证。未实现独立 `ulhpc-submit validate`；资源限制深度校验仍是后续项。
 
 ### 8. 快速测试 / 资源校准
 
@@ -199,7 +199,7 @@ ulhpc-submit quick-test calibrate \
   [normal submit options] -- COMMAND
 ```
 
-状态：已实现初版。`quick-test smoke` 会用 in-job `timeout` 包装用户命令；`quick-test calibrate` 会在完成后查询 `sacct` 并输出 CPU efficiency、allocated core-hours、ReqMem/MaxRSS 和 sizing hints。未实现 GPU utilization、自动资源搜索、自动改写正式任务参数。
+状态：已实现初版。`quick-test smoke` 会用 in-job `timeout` 包装用户命令；`quick-test calibrate` 会在完成后查询 `sacct` 并输出 CPU efficiency、allocated core-hours、ReqMem/MaxRSS 和 sizing hints。Iris 的小数秒 CPU accounting 和 `.batch` step MaxRSS 已支持。`--submit-only` 只提交任务，不查询 accounting 或输出 calibration 结论。未实现 GPU utilization、自动资源搜索、自动改写正式任务参数。
 
 **建议测量指标**
 
@@ -442,7 +442,9 @@ ulhpc-submit --show-config --explain
 - 复用现有同步、staging、persistent output、runtime setup、submit、monitor、log fetch、manifest。
 - 在 Slurm script 中使用 `timeout` 包装用户命令，而不是依赖本地进程超时。
 - 完成后查询 `sacct -j <jobid>`，复用 `usage.py` 的 duration、CPU efficiency、core-hours、ReqMem/MaxRSS 解析能力。
+- 支持 Iris `TotalCPU` 的小数秒格式，并把 `.batch` step 的 MaxRSS 合并到顶层 job 报告。
 - 输出人类可读建议；`--json` 时保留现有 pipeline JSON 在 stdout，quick-test 人类可读分析写入 stderr。
+- `--submit-only` / `--detach` 在提交后返回，不运行 accounting 或 calibration 分析。
 
 第一版不做（仍未实现）：
 

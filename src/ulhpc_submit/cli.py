@@ -423,6 +423,7 @@ def parse_quick_test_args(argv: Optional[List[str]] = None) -> argparse.Namespac
     parser = argparse.ArgumentParser(
         prog="ulhpc-submit quick-test",
         description="Run a short Slurm smoke test or resource calibration run.",
+        allow_abbrev=False,
     )
     parser.add_argument("mode", choices=["smoke", "calibrate"])
     parser.add_argument(
@@ -516,6 +517,14 @@ def _run_doctor(argv: Optional[List[str]] = None) -> int:
         for module in modules:
             rc, _, err = ssh.exec_command(f"module avail {shlex.quote(module)}")
             if rc != 0:
+                detail = (err or "").strip()
+                if rc == 127 or "module: command not found" in detail:
+                    print(
+                        f"[ulhpc-submit] WARNING module check skipped on access node: "
+                        f"the module command is unavailable; use quick-test smoke to "
+                        f"validate {module} on a compute node."
+                    )
+                    continue
                 print(f"[ulhpc-submit] ERROR module not available: {module}: {err}", file=sys.stderr)
                 return 1
             print(f"[ulhpc-submit] Module available: {module}")
@@ -642,6 +651,9 @@ def _run_quick_test(argv: Optional[List[str]] = None) -> int:
         **kwargs,
     )
     rc = pipeline.run()
+
+    if submit_args.submit_only:
+        return rc
 
     timed_out = False
     if pipeline.logger and pipeline.logger.log_file.exists():

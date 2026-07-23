@@ -40,3 +40,19 @@ def test_calibration_lines_flags_oom():
 
     assert "state: OUT_OF_MEMORY" in text
     assert "increase --mem" in text
+
+
+def test_calibration_lines_handles_iris_fractional_cpu_and_batch_rss():
+    job = parse_sacct_jobs(
+        "5552552|pilot|batch|COMPLETED|00:00:46|1|00:45.455|4G|\n"
+        "5552552.batch|batch||COMPLETED|00:00:46|1|00:45.455||539880K\n"
+        "5552552.extern|extern||COMPLETED|00:00:47|1|00:00:00||\n"
+    )[0]
+
+    text = "\n".join(calibration_lines(job))
+
+    assert "CPU efficiency: 98.8%" in text
+    assert "Memory: requested 4G; max RSS 539880K" in text
+    assert "Memory used/requested: 12.9%" in text
+    assert "requesting fewer CPUs" not in text
+    assert "memory request appears high" in text

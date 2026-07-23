@@ -38,11 +38,11 @@ class UsageJob:
         return self.state.split()[0].split("+", 1)[0]
 
     @property
-    def elapsed_seconds(self) -> int:
+    def elapsed_seconds(self) -> float:
         return parse_slurm_duration(self.elapsed)
 
     @property
-    def total_cpu_seconds(self) -> int:
+    def total_cpu_seconds(self) -> float:
         return parse_slurm_duration(self.total_cpu)
 
     @property
@@ -84,7 +84,7 @@ class UsageSummary:
         ]
 
 
-def parse_slurm_duration(value: str) -> int:
+def parse_slurm_duration(value: str) -> float:
     """Parse Slurm durations like DD-HH:MM:SS, HH:MM:SS, or MM:SS."""
     text = value.strip()
     if not text or text in {"Unknown", "UNLIMITED", "None"}:
@@ -97,26 +97,30 @@ def parse_slurm_duration(value: str) -> int:
         except ValueError:
             return 0
     parts = text.split(":")
-    try:
-        numbers = [int(part) for part in parts]
-    except ValueError:
-        return 0
-    if len(numbers) == 3:
-        hours, minutes, seconds = numbers
-    elif len(numbers) == 2:
-        hours = 0
-        minutes, seconds = numbers
-    elif len(numbers) == 1:
-        hours = 0
-        minutes = 0
-        seconds = numbers[0]
+    if len(parts) == 3:
+        hour_text, minute_text, second_text = parts
+    elif len(parts) == 2:
+        hour_text = "0"
+        minute_text, second_text = parts
+    elif len(parts) == 1:
+        hour_text = "0"
+        minute_text = "0"
+        second_text = parts[0]
     else:
+        return 0
+    try:
+        hours = int(hour_text)
+        minutes = int(minute_text)
+        seconds = float(second_text)
+    except ValueError:
         return 0
     return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
 def parse_sacct_jobs(output: str) -> List[UsageJob]:
     jobs: List[UsageJob] = []
+    jobs_by_id = {}
+    step_max_rss = {}
     for line in output.splitlines():
         if not line.strip():
             continue
@@ -125,24 +129,34 @@ def parse_sacct_jobs(output: str) -> List[UsageJob]:
             continue
         job_id = parts[0].strip()
         if "." in job_id:
+            parent_id, step_name = job_id.split(".", 1)
+            max_rss = parts[8].strip()
+            if max_rss and (
+                parent_id not in step_max_rss or step_name == "batch"
+            ):
+                step_max_rss[parent_id] = max_rss
             continue
         try:
             alloc_cpus = int(parts[5].strip() or "0")
         except ValueError:
             alloc_cpus = 0
-        jobs.append(
-            UsageJob(
-                job_id=job_id,
-                job_name=parts[1].strip(),
-                partition=parts[2].strip(),
-                state=parts[3].strip(),
-                elapsed=parts[4].strip(),
-                alloc_cpus=alloc_cpus,
-                total_cpu=parts[6].strip(),
-                req_mem=parts[7].strip(),
-                max_rss=parts[8].strip(),
-            )
+        job = UsageJob(
+            job_id=job_id,
+            job_name=parts[1].strip(),
+            partition=parts[2].strip(),
+            state=parts[3].strip(),
+            elapsed=parts[4].strip(),
+            alloc_cpus=alloc_cpus,
+            total_cpu=parts[6].strip(),
+            req_mem=parts[7].strip(),
+            max_rss=parts[8].strip(),
         )
+        jobs.append(job)
+        jobs_by_id[job_id] = job
+    for parent_id, max_rss in step_max_rss.items():
+        job = jobs_by_id.get(parent_id)
+        if job is not None:
+            job.max_rss = max_rss
     return jobs
 
 
