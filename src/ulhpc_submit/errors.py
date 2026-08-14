@@ -118,6 +118,34 @@ class JobInvalidResourcesError(JobError):
     suggestion = "Requested resources exceed partition limits. Reduce --time, --mem, --cpus, or --gpus."
 
 
+class JobAuthorizationError(JobError):
+    code = "JOB_PARTITION_AUTHORIZATION_ERROR"
+    suggestion = (
+        "Slurm rejected the current user/group/account/QOS for the requested partition. "
+        "Verify Unix group membership, Slurm account/default account, partition ACLs, "
+        "and QOS. Do not change CPU, memory, GPU, or walltime unless Slurm explicitly "
+        "reports a resource-limit violation."
+    )
+
+
+class JobInvalidAccountError(JobAuthorizationError):
+    code = "JOB_INVALID_ACCOUNT"
+    suggestion = "Verify the Slurm account and its association with the current user and partition."
+
+
+class JobInvalidQOSError(JobAuthorizationError):
+    code = "JOB_INVALID_QOS"
+    suggestion = "Verify the requested QOS and the user's account/QOS association."
+
+
+class JobLogFetchError(JobError):
+    code = "JOB_LOG_FETCH_ERROR"
+    suggestion = (
+        "The job finished, but one or more Slurm log files could not be read. "
+        "Verify the reported remote paths and filesystem permissions, then retry with fetch."
+    )
+
+
 # ---------- Job runtime / monitor errors ----------
 
 class JobPendingTimeoutError(JobError):

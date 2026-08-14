@@ -4,6 +4,7 @@ from ulhpc_submit.usage import (
     build_fairshare_command,
     build_sacct_recent_command,
     extract_fairshare,
+    collect_usage_summary_with_retry,
     parse_sacct_jobs,
     parse_slurm_duration,
     summarize_usage,
@@ -40,6 +41,84 @@ def test_extract_fairshare_from_ulhpcshare_table():
 
     assert value == "0.812345"
     assert lines[0].startswith("Account User")
+
+
+def test_extract_fairshare_skips_separator_row():
+    _, value = extract_fairshare(
+        "Account User RawShares NormShares EffectvUsage FairShare\n"
+        "------- ---- --------- ---------- ------------- ----------\n"
+    )
+
+    assert value is None
+
+
+def test_accounting_retry_is_bounded_and_stops_when_ready():
+    class DelayedSSH:
+        def __init__(self):
+            self.sacct_calls = 0
+
+        def exec_command(self, command):
+            if command.startswith("ulhpcshare"):
+                return 0, "", ""
+            self.sacct_calls += 1
+            if self.sacct_calls < 3:
+                return 0, "", ""
+            return 0, (
+                "123|pilot|batch|COMPLETED|00:00:10|1|00:09.5|4G|\n"
+                "123.batch|batch||COMPLETED|00:00:10|1|00:09.5||512M\n"
+            ), ""
+
+    ssh = DelayedSSH()
+    sleeps = []
+    summary = collect_usage_summary_with_retry(
+        ssh, user="testuser", days=1, job_id="123", delays=(1, 2, 4), sleep=sleeps.append
+    )
+
+    assert ssh.sacct_calls == 3
+    assert sleeps == [1, 2]
+    assert summary.jobs[0].max_rss == "512M"
+
+
+def test_accounting_retry_stops_after_bound():
+    class EmptySSH:
+        def __init__(self):
+            self.sacct_calls = 0
+
+        def exec_command(self, command):
+            if command.startswith("ulhpcshare"):
+                return 0, "", ""
+            self.sacct_calls += 1
+            return 0, "", ""
+
+    ssh = EmptySSH()
+    summary = collect_usage_summary_with_retry(
+        ssh, user="testuser", days=1, job_id="123", delays=(1, 2), sleep=lambda _: None
+    )
+
+    assert ssh.sacct_calls == 3
+    assert summary.jobs == []
+
+
+def test_accounting_retry_does_not_retry_command_error():
+    class FailedSSH:
+        def __init__(self):
+            self.sacct_calls = 0
+
+        def exec_command(self, command):
+            if command.startswith("ulhpcshare"):
+                return 0, "", ""
+            self.sacct_calls += 1
+            return 1, "", "permission denied"
+
+    ssh = FailedSSH()
+    sleeps = []
+    summary = collect_usage_summary_with_retry(
+        ssh, user="testuser", days=1, job_id="123", delays=(1, 2), sleep=sleeps.append
+    )
+
+    assert ssh.sacct_calls == 1
+    assert sleeps == []
+    assert summary.sacct_error == "permission denied"
 
 
 def test_summarize_usage_adds_behavior_hints():

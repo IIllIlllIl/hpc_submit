@@ -6,7 +6,50 @@ import shlex
 from pathlib import Path
 from typing import Optional
 
-from .errors import JobInvalidResourcesError, JobSubmitError
+from .errors import (
+    JobAuthorizationError,
+    JobInvalidAccountError,
+    JobInvalidQOSError,
+    JobInvalidResourcesError,
+    JobSubmitError,
+)
+
+
+def classify_sbatch_error(stderr: str):
+    """Return the most specific exception class for an sbatch failure."""
+    text = stderr.lower()
+    if "invalid qos" in text or "invalid qos specification" in text:
+        return JobInvalidQOSError
+    if "invalid account" in text and "account/partition" not in text:
+        return JobInvalidAccountError
+    if any(
+        pattern in text
+        for pattern in (
+            "user's group not permitted to use this partition",
+            "invalid account or account/partition combination",
+            "not authorized to use this partition",
+            "not permitted to use this partition",
+        )
+    ):
+        return JobAuthorizationError
+    if any(
+        pattern in text
+        for pattern in (
+            "requested node configuration is not available",
+            "invalid time limit",
+            "requested time limit is invalid",
+            "time limit specification",
+            "invalid memory",
+            "memory specification",
+            "invalid generic resource",
+            "more processors requested",
+            "invalid number of cpus",
+            "requested resources exceed",
+            "request exceeds",
+        )
+    ):
+        return JobInvalidResourcesError
+    return JobSubmitError
 from .ssh_client import SSHClient
 
 
@@ -30,27 +73,9 @@ class JobManager:
         """Run sbatch and return the job ID."""
         rc, out, err = self.ssh.exec_command(f"sbatch {shlex.quote(remote_script_path)}")
         if rc != 0:
-            stderr_lower = (err or "").lower()
-            if any(
-                keyword in stderr_lower
-                for keyword in (
-                    "invalid",
-                    "exceeds",
-                    "partition",
-                    "memory",
-                    "time limit",
-                    "qos",
-                    "cpu",
-                    "gpu",
-                    "node configuration",
-                    "not available",
-                    "exceeds",
-                )
-            ):
-                raise JobInvalidResourcesError(
-                    f"sbatch rejected resource request: {err.strip()}"
-                )
-            raise JobSubmitError(f"sbatch failed ({rc}): {err.strip()}")
+            detail = (err or out).strip()
+            error_class = classify_sbatch_error(detail)
+            raise error_class(f"sbatch failed ({rc}): {detail}")
 
         match = re.search(r"Submitted batch job\s+(\d+)", out)
         if not match:

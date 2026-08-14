@@ -37,6 +37,7 @@ class JobMonitor:
         poll_interval: int = 10,
         pending_timeout: int = 3600,
         hint_interval: int = 300,
+        initial_hint_delay: int = 60,
         clock: Optional[Callable[[], float]] = None,
         progress: Optional[Callable[[str], None]] = None,
     ):
@@ -45,6 +46,7 @@ class JobMonitor:
         self.poll_interval = poll_interval
         self.pending_timeout = pending_timeout
         self.hint_interval = hint_interval
+        self.initial_hint_delay = initial_hint_delay
         self.clock = clock or time.time
         self.progress = progress or (lambda _msg: None)
         self.events: list = []
@@ -138,8 +140,11 @@ class JobMonitor:
                         f"(limit {self.pending_timeout}s). Reason: {event.reason}"
                     )
                 if (
-                    self._last_hint_at is None
-                    or (self.clock() - self._last_hint_at) >= self.hint_interval
+                    waited >= self.initial_hint_delay
+                    and (
+                        self._last_hint_at is None
+                        or (self.clock() - self._last_hint_at) >= self.hint_interval
+                    )
                 ):
                     self._last_hint_at = self.clock()
                     self.progress(

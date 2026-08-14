@@ -67,7 +67,9 @@ class FakeSSHClient:
             return 0, "1\n", ""
         if "tail -n" in command:
             path = command.split()[-1]
-            return 0, self.files.get(path, ""), ""
+            if path not in self.files:
+                return 1, "", f"tail: cannot open {path}: No such file"
+            return 0, self.files[path], ""
         return 0, "", ""
 
     def expand_remote_path(self, remote_path: str) -> str:
@@ -83,7 +85,9 @@ class FakeSSHClient:
 
     def sftp_get(self, remote_path: str, local_path: str) -> None:
         self.commands.append(f"sftp_get({remote_path}, {local_path})")
-        Path(local_path).write_text(self.files.get(remote_path, ""), encoding="utf-8")
+        if remote_path not in self.files:
+            raise FileNotFoundError(remote_path)
+        Path(local_path).write_text(self.files[remote_path], encoding="utf-8")
 
     def close(self) -> None:
         self.connected = False
@@ -128,6 +132,8 @@ def fake_rsync_success(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
     dst = Path(dst_spec.split(":", 1)[1])
     dst.mkdir(parents=True, exist_ok=True)
     for item in Path(src).iterdir():
+        if item.name == ".ulhpc_submit":
+            continue
         if item.is_file():
             shutil.copy2(item, dst / item.name)
         elif item.is_dir():

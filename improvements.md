@@ -143,7 +143,7 @@ ulhpc-submit --detach python main.py
 
 - 保证本地进程退出不会影响 Slurm job。
 
-状态：已实现。`--submit-only` / `--detach` 在 `sbatch` 成功后打印 job id、remote workdir、stdout/stderr 路径和查询命令，然后跳过 monitor/log fetch。
+状态：已实现。`--submit-only` / `--detach` 在 `sbatch` 成功后打印 job id、独立 remote run workdir、受保护的 stdout/stderr 路径和查询命令，然后跳过 monitor/log fetch。后续同步不会覆盖该 run 的代码或删除其日志。
 
 ### 7. 预检查与 fail-fast
 
@@ -199,7 +199,7 @@ ulhpc-submit quick-test calibrate \
   [normal submit options] -- COMMAND
 ```
 
-状态：已实现初版。`quick-test smoke` 会用 in-job `timeout` 包装用户命令；`quick-test calibrate` 会在完成后查询 `sacct` 并输出 CPU efficiency、allocated core-hours、ReqMem/MaxRSS 和 sizing hints。Iris 的小数秒 CPU accounting 和 `.batch` step MaxRSS 已支持。`--submit-only` 只提交任务，不查询 accounting 或输出 calibration 结论。未实现 GPU utilization、自动资源搜索、自动改写正式任务参数。
+状态：已实现初版。`quick-test smoke` 会用 in-job `timeout` 包装用户命令；`quick-test calibrate` 会在完成后以有界 backoff 查询 `sacct` 并输出 CPU efficiency、allocated core-hours、ReqMem/MaxRSS 和 sizing hints。Iris 的小数秒 CPU accounting 和 `.batch` step MaxRSS 已支持。`--submit-only` 只提交任务，不查询 accounting 或输出 calibration 结论。未实现 GPU utilization、自动资源搜索、自动改写正式任务参数。
 
 **建议测量指标**
 

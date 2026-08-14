@@ -8,9 +8,12 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
+from uuid import uuid4
 
 from .errors import CodeError, EnvDependencyError, HPCResourceError, NetworkError, ULHPCError
 from .ssh_client import SSHClient
+from .remote_paths import stderr_path as managed_stderr_path
+from .remote_paths import stdout_path as managed_stdout_path
 
 
 class RunLogger:
@@ -76,6 +79,8 @@ class LogManager:
         run_logger: RunLogger,
         full_logs: bool = False,
         tail_lines: int = 500,
+        stdout_path: Optional[str] = None,
+        stderr_path: Optional[str] = None,
     ):
         self.ssh = ssh
         self.remote_dir = remote_dir
@@ -83,36 +88,50 @@ class LogManager:
         self.run_logger = run_logger
         self.full_logs = full_logs
         self.tail_lines = tail_lines
+        self.stdout_path = stdout_path
+        self.stderr_path = stderr_path
+        self.fetch_errors: List[str] = []
 
     def _remote_out_path(self) -> str:
-        return f"{self.remote_dir}/job_{self.job_id}.out"
+        return self.stdout_path or managed_stdout_path(self.remote_dir, self.job_id)
 
     def _remote_err_path(self) -> str:
-        return f"{self.remote_dir}/job_{self.job_id}.err"
+        return self.stderr_path or managed_stderr_path(self.remote_dir, self.job_id)
+
+    def _candidate_paths(self, label: str) -> List[str]:
+        primary = self._remote_out_path() if label == "out" else self._remote_err_path()
+        legacy = f"{self.remote_dir}/job_{self.job_id}.{label}"
+        return [primary] if primary == legacy else [primary, legacy]
 
     def fetch(self) -> Tuple[str, str]:
         """Return (stdout, stderr) strings.
 
         Falls back to tailing over SSH if files are large or SFTP fails.
         """
-        stdout = self._fetch_file(self._remote_out_path(), "out")
-        stderr = self._fetch_file(self._remote_err_path(), "err")
+        self.fetch_errors = []
+        stdout = self._fetch_file("out")
+        stderr = self._fetch_file("err")
         return stdout, stderr
 
-    def _fetch_file(self, remote_path: str, label: str) -> str:
-        if self.full_logs:
-            local_tmp = self.run_logger.run_dir / f"job_{self.job_id}.{label}"
-            try:
-                self.ssh.sftp_get(remote_path, str(local_tmp))
-                return local_tmp.read_text(encoding="utf-8", errors="replace")
-            except Exception as exc:  # noqa: BLE001
-                self.run_logger.info(f"SFTP get {label} failed ({exc}); tailing via SSH")
-        cmd = f"tail -n {self.tail_lines} {shlex.quote(remote_path)}"
-        rc, out, err = self.ssh.exec_command(cmd)
-        if rc != 0:
-            self.run_logger.error(f"Could not fetch remote {label}: {err}")
-            return ""
-        return out
+    def _fetch_file(self, label: str) -> str:
+        errors: List[str] = []
+        for remote_path in self._candidate_paths(label):
+            if self.full_logs:
+                local_tmp = self.run_logger.run_dir / f"job_{self.job_id}.{label}"
+                try:
+                    self.ssh.sftp_get(remote_path, str(local_tmp))
+                    return local_tmp.read_text(encoding="utf-8", errors="replace")
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{remote_path}: {exc}")
+            cmd = f"tail -n {self.tail_lines} {shlex.quote(remote_path)}"
+            rc, out, err = self.ssh.exec_command(cmd)
+            if rc == 0:
+                return out
+            errors.append(f"{remote_path}: {(err or out).strip()}")
+        detail = f"Could not fetch remote {label}: " + "; ".join(errors)
+        self.fetch_errors.append(detail)
+        self.run_logger.error(detail)
+        return ""
 
     def merge(self, stdout: str, stderr: str) -> None:
         """Append remote outputs to local log file."""
@@ -203,5 +222,5 @@ class LogManager:
 def create_run_logger(config_log_dir: Path, project_name: str) -> RunLogger:
     """Create a logger in a timestamped run directory."""
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = config_log_dir / f"{project_name}_{now}"
+    run_dir = config_log_dir / f"{project_name}_{now}_{uuid4().hex[:8]}"
     return RunLogger(run_dir)

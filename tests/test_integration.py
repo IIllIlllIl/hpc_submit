@@ -197,11 +197,54 @@ def test_submit_only_exits_after_sbatch(project_dir: Path, tmp_path: Path, monke
     captured = capsys.readouterr()
     assert "Submit-only mode" in captured.out
     assert "Job ID: 4242" in captured.out
-    assert f"Remote workdir: {remote_root}" in captured.out
-    assert f"Remote stdout: {remote_root}/job_4242.out" in captured.out
-    assert f"Remote stderr: {remote_root}/job_4242.err" in captured.out
+    assert f"Remote workdir: {remote_root}/.ulhpc_submit/runs/" in captured.out
+    assert f"Remote stdout: {remote_root}/.ulhpc_submit/logs/job_4242.out" in captured.out
+    assert f"Remote stderr: {remote_root}/.ulhpc_submit/logs/job_4242.err" in captured.out
     assert "squeue -j 4242" in captured.out
     assert "sacct -j 4242" in captured.out
+
+
+def test_monitored_pipeline_fails_when_remote_logs_are_missing(
+    project_dir: Path, tmp_path: Path, monkeypatch, capsys
+):
+    from conftest import FakeSSHClient
+
+    import ulhpc_submit.main as main_module
+
+    remote_root = tmp_path / "remote" / "sample_project"
+
+    class MissingLogsSSH(FakeSSHClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.set_response("sbatch", 0, "Submitted batch job 4343\n", "")
+            self.set_response("squeue", 0, "", "")
+            self.set_response(
+                "sacct", 0, "4343|COMPLETED|0:0|0:0|1M|node01\n", ""
+            )
+
+    monkeypatch.setattr(main_module, "SSHClient", MissingLogsSSH)
+    cfg = Config(
+        host="access-iris.uni.lu", port=8022, user="testuser",
+        remote_project_dir=str(remote_root), default_partition="batch",
+        default_nodes=1, default_ntasks=1, default_cpus_per_task=1,
+        default_mem="4G", default_time="01:00:00",
+        conda_module="miniconda3", python_module="lang/Python/3.11",
+        sync_excludes=[".git"], poll_interval=0, pending_timeout=3600,
+        log_dir=str(tmp_path / "logs"),
+    )
+
+    rc = submit_hpc_task(
+        config=cfg,
+        command=["python", "main.py"],
+        local_dir=str(project_dir),
+        remote_dir=str(remote_root),
+        no_sync=True,
+    )
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "JOB_LOG_FETCH_ERROR" in captured.out
+    assert "Run complete" not in captured.out
 
 
 def test_stage_data_syncs_external_dir_and_links_into_project(
@@ -278,7 +321,8 @@ def test_stage_data_syncs_external_dir_and_links_into_project(
     commands = "\n".join(instances[0].commands)
     assert "ln -sfn" in commands
     assert str(remote_stage) in commands
-    assert str(remote_root / "output" / "verified") in commands
+    assert str(remote_root / ".ulhpc_submit" / "runs") in commands
+    assert "workdir/output/verified" in commands
     captured = capsys.readouterr()
     assert "Staging data" in captured.out
     assert "Linked staged data" in captured.out
@@ -353,7 +397,8 @@ def test_persistent_output_links_remote_state_into_project(
     assert f"mkdir -p {remote_state}" in commands
     assert "ln -sfn" in commands
     assert str(remote_state) in commands
-    assert str(remote_root / "output" / "run") in commands
+    assert str(remote_root / ".ulhpc_submit" / "runs") in commands
+    assert "workdir/output/run" in commands
     captured = capsys.readouterr()
     assert "Linked persistent output" in captured.out
 
@@ -480,14 +525,16 @@ def test_submit_only_json_output_and_manifest(project_dir: Path, tmp_path: Path,
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert payload["job_id"] == "5151"
-    assert payload["remote_dir"] == str(remote_root)
-    assert payload["stdout_path"] == f"{remote_root}/job_5151.out"
-    assert payload["stderr_path"] == f"{remote_root}/job_5151.err"
+    assert payload["remote_project_dir"] == str(remote_root)
+    assert payload["remote_dir"].startswith(f"{remote_root}/.ulhpc_submit/runs/")
+    assert payload["remote_dir"].endswith("/workdir")
+    assert payload["stdout_path"] == f"{remote_root}/.ulhpc_submit/logs/job_5151.out"
+    assert payload["stderr_path"] == f"{remote_root}/.ulhpc_submit/logs/job_5151.err"
     manifest_path = Path(payload["manifest_path"])
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["job_id"] == "5151"
-    assert manifest["sync_excludes"] == [".git"]
+    assert manifest["sync_excludes"] == [".git", ".ulhpc_submit"]
 
 
 def test_pre_sync_hook_runs_before_sync(project_dir: Path, tmp_path: Path, monkeypatch):
@@ -552,4 +599,72 @@ def test_pre_sync_hook_runs_before_sync(project_dir: Path, tmp_path: Path, monke
 
     assert rc == 0
     assert marker.exists()
-    assert (remote_root / "hook_marker.txt").read_text(encoding="utf-8") == "hook"
+    run_markers = list(
+        (remote_root / ".ulhpc_submit" / "runs").glob("*/workdir/hook_marker.txt")
+    )
+    assert len(run_markers) == 1
+    assert run_markers[0].read_text(encoding="utf-8") == "hook"
+
+
+def test_consecutive_submissions_use_immutable_remote_workdirs(
+    project_dir: Path, tmp_path: Path, monkeypatch
+):
+    import shutil
+    import subprocess
+
+    from conftest import FakeSSHClient
+
+    import ulhpc_submit.main as main_module
+    import ulhpc_submit.sync as sync_module
+
+    remote_root = tmp_path / "remote" / "sample_project"
+    destinations = []
+
+    class SnapshotSSH(FakeSSHClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.set_response("sbatch", 0, "Submitted batch job 7001\n", "")
+
+    def fake_rsync(cmd, **kwargs):
+        src = Path(cmd[-2])
+        dst = Path(cmd[-1].split(":", 1)[1])
+        destinations.append(dst)
+        dst.mkdir(parents=True, exist_ok=True)
+        for item in src.iterdir():
+            if item.name == ".ulhpc_submit":
+                continue
+            if item.is_file():
+                shutil.copy2(item, dst / item.name)
+            elif item.is_dir():
+                shutil.copytree(item, dst / item.name, dirs_exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(main_module, "SSHClient", SnapshotSSH)
+    monkeypatch.setattr(sync_module.subprocess, "run", fake_rsync)
+    cfg = Config(
+        host="access-iris.uni.lu", port=8022, user="testuser",
+        remote_project_dir=str(remote_root), default_partition="batch",
+        default_nodes=1, default_ntasks=1, default_cpus_per_task=1,
+        default_mem="4G", default_time="01:00:00",
+        conda_module="miniconda3", python_module="lang/Python/3.11",
+        sync_excludes=[".git"], poll_interval=0, pending_timeout=3600,
+        log_dir=str(tmp_path / "logs"),
+    )
+
+    assert submit_hpc_task(
+        config=cfg, command=["python", "main.py"], local_dir=str(project_dir),
+        remote_dir=str(remote_root), submit_only=True,
+    ) == 0
+    first_workdir = destinations[-1]
+    (project_dir / "main.py").write_text("print('second')\n", encoding="utf-8")
+    assert submit_hpc_task(
+        config=cfg, command=["python", "main.py"], local_dir=str(project_dir),
+        remote_dir=str(remote_root), submit_only=True,
+    ) == 0
+    second_workdir = destinations[-1]
+
+    assert first_workdir != second_workdir
+    assert first_workdir.parent.name != second_workdir.parent.name
+    assert "second" not in (first_workdir / "main.py").read_text(encoding="utf-8")
+    assert "second" in (second_workdir / "main.py").read_text(encoding="utf-8")
+    assert all(str(path).startswith(f"{remote_root}/.ulhpc_submit/runs/") for path in destinations)

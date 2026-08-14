@@ -520,7 +520,9 @@ def test_cli_fetch_success(monkeypatch, tmp_path, capsys):
 
         def exec_command(self, command):
             path = command.split()[-1]
-            return 0, self.files.get(path, ""), ""
+            if path not in self.files:
+                return 1, "", "No such file"
+            return 0, self.files[path], ""
 
         def close(self):
             pass
@@ -556,6 +558,41 @@ def test_cli_fetch_rejects_unsafe_job_id(monkeypatch, tmp_path, capsys):
     assert rc == 2
     captured = capsys.readouterr()
     assert "job id" in captured.err.lower()
+
+
+def test_cli_fetch_returns_nonzero_when_logs_are_missing(monkeypatch, tmp_path, capsys):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        f"user: testuser\nlog_dir: {tmp_path / 'logs'}\n", encoding="utf-8"
+    )
+
+    class MissingSSHClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            pass
+
+        def expand_remote_path(self, path):
+            return path
+
+        def exec_command(self, command):
+            return 1, "", "No such file"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ulhpc_submit.cli.SSHClient", MissingSSHClient)
+
+    rc = main([
+        "fetch", "--config", str(config_path), "--job-id", "123",
+        "--remote-dir", "/remote",
+    ])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "No such file" in captured.err
+    assert "Fetched logs" not in captured.out
 
 
 def test_cli_rejects_placeholder_user(capsys, monkeypatch, tmp_path):

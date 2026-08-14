@@ -92,7 +92,9 @@ class FakeSSHClient:
             return 0, "0\n", ""
         if "tail -n" in command:
             path = command.split()[-1]
-            return 0, self.files.get(path, ""), ""
+            if path not in self.files:
+                return 1, "", f"tail: cannot open {path}: No such file"
+            return 0, self.files[path], ""
         return 0, "", ""
 
     def expand_remote_path(self, remote_path: str) -> str:
@@ -108,7 +110,9 @@ class FakeSSHClient:
 
     def sftp_get(self, remote_path: str, local_path: str) -> None:
         self.commands.append(f"sftp_get({remote_path}, {local_path})")
-        content = self.files.get(remote_path, "")
+        if remote_path not in self.files:
+            raise FileNotFoundError(remote_path)
+        content = self.files[remote_path]
         Path(local_path).write_text(content, encoding="utf-8")
 
     def close(self) -> None:

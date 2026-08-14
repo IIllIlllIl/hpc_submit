@@ -25,12 +25,48 @@ def test_log_manager_fetch_and_merge(fake_ssh, tmp_path: Path):
     assert "stdout line" in log_text
 
 
+def test_log_manager_prefers_managed_logs_and_accepts_empty_files(fake_ssh, tmp_path: Path):
+    logger = RunLogger(tmp_path / "run")
+    fake_ssh.files["/remote/.ulhpc_submit/logs/job_42.out"] = ""
+    fake_ssh.files["/remote/.ulhpc_submit/logs/job_42.err"] = "managed stderr\n"
+    fake_ssh.files["/remote/job_42.out"] = "legacy stdout\n"
+    lm = LogManager(fake_ssh, "/remote", "42", logger)
+
+    out, err = lm.fetch()
+
+    assert out == ""
+    assert err == "managed stderr\n"
+    assert lm.fetch_errors == []
+    assert not any("/remote/job_42.out" in command for command in fake_ssh.commands)
+
+
+def test_log_manager_reports_one_missing_stream_and_keeps_other(fake_ssh, tmp_path: Path):
+    logger = RunLogger(tmp_path / "run")
+    fake_ssh.files["/remote/.ulhpc_submit/logs/job_42.out"] = "available\n"
+    lm = LogManager(fake_ssh, "/remote", "42", logger)
+
+    out, err = lm.fetch()
+
+    assert out == "available\n"
+    assert err == ""
+    assert len(lm.fetch_errors) == 1
+    assert "job_42.err" in lm.fetch_errors[0]
+
+
+def test_create_run_logger_is_unique_within_same_second(tmp_path: Path):
+    first = create_run_logger(tmp_path, "project")
+    second = create_run_logger(tmp_path, "project")
+    assert first.run_dir != second.run_dir
+
+
 def test_log_manager_quotes_tail_paths(fake_ssh, tmp_path: Path):
     logger = RunLogger(tmp_path / "run")
     lm = LogManager(fake_ssh, "/remote dir", "42", logger)
     lm.fetch()
     commands = "\n".join(fake_ssh.commands)
+    assert "tail -n 500 '/remote dir/.ulhpc_submit/logs/job_42.out'" in commands
     assert "tail -n 500 '/remote dir/job_42.out'" in commands
+    assert "tail -n 500 '/remote dir/.ulhpc_submit/logs/job_42.err'" in commands
     assert "tail -n 500 '/remote dir/job_42.err'" in commands
 
 

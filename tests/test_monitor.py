@@ -124,6 +124,48 @@ def test_monitor_pending_hints(fake_ssh):
     assert all("PENDING" in h and "Resources" in h for h in hints)
 
 
+def test_monitor_does_not_hint_immediately(fake_ssh, monkeypatch):
+    from conftest import FakeSSHClient
+
+    class BriefPendingSSH(FakeSSHClient):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def exec_command(self, command):
+            if "squeue" in command:
+                self.calls += 1
+                if self.calls == 1:
+                    return 0, 'PENDING 00:00:00 01:00:00 Priority\n', ""
+                return 0, "", ""
+            if "sacct" in command:
+                return 0, "123456|COMPLETED|0:0|0:0|1M|node01\n", ""
+            return super().exec_command(command)
+
+    now = [0.0]
+
+    def clock():
+        now[0] += 1.0
+        return now[0]
+
+    monkeypatch.setattr("ulhpc_submit.monitor.time.sleep", lambda _: None)
+    hints = []
+    monitor = JobMonitor(
+        BriefPendingSSH(),
+        "123456",
+        poll_interval=0,
+        pending_timeout=3600,
+        initial_hint_delay=60,
+        clock=clock,
+        progress=hints.append,
+    )
+
+    final = monitor.monitor()
+
+    assert final.state == "COMPLETED"
+    assert hints == []
+
+
 def test_monitor_node_fail(fake_ssh):
     fake_ssh.set_response("squeue", 0, "", "")
     fake_ssh.set_response("sacct", 0, "123456|NODE_FAIL|1:0|1:0|1M|node01\n", "")

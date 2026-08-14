@@ -45,6 +45,8 @@ class JobScriptBuilder:
         post_run_command: Optional[str] = None,
         on_failure_command: Optional[str] = None,
         command_timeout: Optional[str] = None,
+        stdout_path: Optional[str] = None,
+        stderr_path: Optional[str] = None,
     ):
         self.config = config
         self.command = command
@@ -78,6 +80,8 @@ class JobScriptBuilder:
         self.post_run_command = post_run_command
         self.on_failure_command = on_failure_command
         self.command_timeout = command_timeout
+        self.stdout_path = stdout_path or "job_%j.out"
+        self.stderr_path = stderr_path or "job_%j.err"
 
     def _command_for_runtime(self) -> List[str]:
         """Apply runtime-level command rewrites without changing user args."""
@@ -120,8 +124,8 @@ class JobScriptBuilder:
             f"#SBATCH --cpus-per-task={self.cpus_per_task}",
             f"#SBATCH --mem={self.mem}",
             f"#SBATCH --time={self.time}",
-            "#SBATCH --output=job_%j.out",
-            "#SBATCH --error=job_%j.err",
+            f"#SBATCH --output={self.stdout_path}",
+            f"#SBATCH --error={self.stderr_path}",
             f"#SBATCH --chdir={self.remote_dir}",
         ]
 

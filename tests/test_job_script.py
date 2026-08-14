@@ -17,6 +17,23 @@ def test_script_contains_user_command(project_dir: Path, tmp_config: Config):
     script = builder.build()
     assert "python main.py --epochs 10" in script
     assert "#SBATCH --job-name=sample_project" in script
+
+
+def test_script_supports_managed_absolute_log_paths(project_dir: Path, tmp_config: Config):
+    builder = JobScriptBuilder(
+        config=tmp_config,
+        command=["python", "main.py"],
+        project_dir=str(project_dir),
+        remote_dir="/remote/.ulhpc_submit/runs/run-a/workdir",
+        stdout_path="/remote/.ulhpc_submit/logs/job_%j.out",
+        stderr_path="/remote/.ulhpc_submit/logs/job_%j.err",
+    )
+
+    script = builder.build()
+
+    assert "#SBATCH --output=/remote/.ulhpc_submit/logs/job_%j.out" in script
+    assert "#SBATCH --error=/remote/.ulhpc_submit/logs/job_%j.err" in script
+    assert "#SBATCH --chdir=/remote/.ulhpc_submit/runs/run-a/workdir" in script
     assert "#SBATCH --partition=batch" in script
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 import shlex
+import time
 from typing import List, Optional, Tuple
 
 
@@ -181,7 +182,12 @@ def extract_fairshare(output: str) -> Tuple[List[str], Optional[str]]:
     for row in rows:
         cols = row.split()
         if len(cols) > fairshare_index:
-            value = cols[fairshare_index]
+            candidate = cols[fairshare_index]
+            try:
+                float(candidate)
+            except ValueError:
+                continue
+            value = candidate
             break
     return [lines[header_index], *rows], value
 
@@ -312,3 +318,31 @@ def collect_usage_summary(
         fairshare_error=fairshare_error,
         sacct_error=sacct_error,
     )
+
+
+def collect_usage_summary_with_retry(
+    ssh,
+    user: str,
+    days: int,
+    job_id: str,
+    delays: Tuple[float, ...] = (1, 2, 4, 8),
+    sleep=time.sleep,
+) -> UsageSummary:
+    """Collect completed-job accounting with a short bounded readiness retry."""
+    summary = collect_usage_summary(ssh, user=user, days=days, job_id=job_id)
+    for delay in delays:
+        if summary.sacct_error or _accounting_ready(summary):
+            break
+        sleep(delay)
+        summary = collect_usage_summary(ssh, user=user, days=days, job_id=job_id)
+    return summary
+
+
+def _accounting_ready(summary: UsageSummary) -> bool:
+    if not summary.jobs:
+        return False
+    job = summary.jobs[0]
+    terminal = job.base_state in {
+        "COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY"
+    }
+    return terminal and bool(job.total_cpu) and bool(job.max_rss)

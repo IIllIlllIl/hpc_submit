@@ -20,10 +20,10 @@ This file tracks deferred items and explicit non-goals after the first quick-tes
   - Current behavior: `doctor` checks SSH, remote directory writability, module availability when the access node exposes the `module` command, and partition visibility. Compute-node module loading can be validated with quick-test.
   - Possible future scope: validate partition wall-time limits, account/QoS access, GPU availability, and memory limits before submission.
 
-- Slurm accounting availability retry.
-  - Status: future work pending real-cluster validation.
-  - Current behavior: an attached calibration queries `sacct` once after the monitored job finishes.
-  - Possible future scope: retry with a short bounded backoff when the job has completed but its accounting record or step metrics are not visible yet.
+- Remote run retention and cleanup.
+  - Status: future work.
+  - Current behavior: synced submissions use immutable remote run directories so pending/running jobs cannot be changed by a later sync. Old runs are not silently deleted.
+  - Possible future scope: add an explicit cleanup command with age/count limits and active-job protection.
 
 ## Non-Goals
 

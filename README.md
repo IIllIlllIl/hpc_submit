@@ -184,6 +184,8 @@ ulhpc-submit --submit-only --json python main.py
 
 Each submitted run also writes `manifest.json` in the local run log directory with job id, remote directory, Slurm script path, stdout/stderr paths, sync excludes, submit time, and local git commit.
 
+For synced submissions, each run receives an immutable remote work directory under `<remote_project_dir>/.ulhpc_submit/runs/<run_id>/workdir`. A later submission therefore cannot overwrite code used by a pending or running job. Slurm logs are stored separately under `<remote_project_dir>/.ulhpc_submit/logs/`, outside every rsync `--delete` target. `--no-sync` intentionally keeps using the explicitly managed remote directory and does not create a code snapshot.
+
 Optional hooks are available for explicit automation:
 
 ```bash
@@ -219,7 +221,7 @@ ulhpc-submit --remote-clean-excluded python main.py
 
 ## Monitoring and logs
 
-After submission, `ulhpc-submit` polls the job state. If the job remains `PENDING` for several minutes, it prints periodic hints to the CLI. When the job finishes, remote `job_%j.out` and `job_%j.err` are merged into a local run log under `~/.local/share/ulhpc-submit/runs/`.
+After submission, `ulhpc-submit` polls the job state. If the job remains `PENDING` for at least one minute, it prints periodic hints to the CLI. When the job finishes, remote logs under `<remote_project_dir>/.ulhpc_submit/logs/` are merged into a unique local run log under `~/.local/share/ulhpc-submit/runs/`. `fetch` first checks the managed log directory and then the legacy project-root paths used by older releases; it returns nonzero when a requested log cannot be read.
 
 Use `--full-logs` to download the complete remote output files instead of tailing the last 500 lines.
 
@@ -256,7 +258,9 @@ ulhpc-submit quick-test calibrate --duration 10m -- python train.py --max-steps 
 
 The smoke test submits a very short Slurm job and wraps the user command with an in-job timeout, so environment, modules, containers, imports, and entrypoints fail quickly instead of leaving a broken long job idle. Defaults: command timeout `10s`, Slurm time `00:01:00`.
 
-The calibration test runs a representative short workload, then inspects Slurm accounting (`Elapsed`, `AllocCPUS`, `TotalCPU`, `ReqMem`, `MaxRSS`) to report CPU efficiency, allocated core-hours, memory headroom, and resource-sizing suggestions for the production command. Defaults: command timeout `10m`, Slurm time `00:11:00` so the in-job timeout can fire before the scheduler walltime.
+The calibration test runs a representative short workload, then inspects Slurm accounting (`Elapsed`, `AllocCPUS`, `TotalCPU`, `ReqMem`, `MaxRSS`) to report CPU efficiency, allocated core-hours, memory headroom, and resource-sizing suggestions for the production command. Defaults: command timeout `10m`, Slurm time `00:11:00` so the in-job timeout can fire before the scheduler walltime. If a completed job's accounting rows are not visible immediately, calibration retries with a short bounded backoff; it never waits indefinitely.
+
+Slurm submission failures distinguish authorization/account/QOS problems from actual resource-limit errors. An authorization error does not recommend reducing CPU, memory, GPU, or walltime; preserve the underlying `sbatch` message when reporting the issue to the HPC administrators.
 
 Quick-test reuses the normal submission options, including `--module`, `--container`, `--stage-data`, `--persistent-output`, and `--json`. With `--json`, the pipeline JSON remains on stdout and quick-test's human-readable analysis is printed to stderr. Quick-test does not automatically rewrite the resource settings for your production run, and the calibration result is only as representative as the short command you provide.
 

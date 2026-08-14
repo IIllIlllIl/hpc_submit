@@ -25,7 +25,11 @@ from .logs import LogManager, create_run_logger
 from .main import SubmissionPipeline, submit_hpc_task
 from .quick_test import calibration_lines
 from .ssh_client import SSHClient
-from .usage import collect_usage_summary, summarize_usage
+from .usage import (
+    collect_usage_summary,
+    collect_usage_summary_with_retry,
+    summarize_usage,
+)
 
 
 JOB_ID_RE = re.compile(r"^[0-9]+(?:_[0-9]+)?$")
@@ -689,7 +693,7 @@ def _run_quick_test(argv: Optional[List[str]] = None) -> int:
         )
         try:
             ssh.connect()
-            summary = collect_usage_summary(
+            summary = collect_usage_summary_with_retry(
                 ssh,
                 user=config.user,
                 days=1,
@@ -758,6 +762,10 @@ def _run_fetch(argv: Optional[List[str]] = None) -> int:
         )
         stdout, stderr = manager.fetch()
         manager.merge(stdout, stderr)
+        if manager.fetch_errors:
+            for error in manager.fetch_errors:
+                print(f"[ulhpc-submit] ERROR {error}", file=sys.stderr)
+            return 1
         print(f"[ulhpc-submit] Fetched logs for job {args.job_id}: {logger.log_file}")
         return 0
     except SyncNetworkError as exc:

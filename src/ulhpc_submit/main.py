@@ -13,11 +13,18 @@ from typing import Callable, Dict, List, Optional
 
 from .config import Config
 from .env_manager import EnvironmentManager
-from .errors import ConfigError, StagingError, ULHPCError
+from .errors import ConfigError, JobLogFetchError, StagingError, ULHPCError
 from .job_manager import JobManager
 from .job_script import JobScriptBuilder
 from .logs import LogManager, RunLogger, create_run_logger
 from .monitor import JobMonitor
+from .remote_paths import (
+    log_dir as managed_log_dir,
+    new_run_id,
+    run_workdir,
+    stderr_path as managed_stderr_path,
+    stdout_path as managed_stdout_path,
+)
 from .ssh_client import SSHClient
 from .sync import CodeSync
 
@@ -68,7 +75,10 @@ class SubmissionPipeline:
         self.config = config
         self.command = command
         self.local_dir = Path(local_dir).resolve()
-        self.remote_dir = remote_dir or config.expand_remote_project_dir(self.local_dir.name)
+        self.remote_project_dir = remote_dir or config.expand_remote_project_dir(self.local_dir.name)
+        self.remote_dir = self.remote_project_dir
+        self.run_id = new_run_id()
+        self.remote_log_dir = ""
         self.job_name = job_name or self.local_dir.name
         self.partition = partition
         self.nodes = nodes
@@ -96,6 +106,9 @@ class SubmissionPipeline:
         self.sync_remote_extra_policy = (
             sync_remote_extra_policy or config.sync_remote_extra_policy
         )
+        self.sync_excludes = list(config.sync_excludes)
+        if ".ulhpc_submit" not in self.sync_excludes:
+            self.sync_excludes.append(".ulhpc_submit")
         self.pre_sync_command = pre_sync_command
         self.pre_run_command = pre_run_command
         self.post_run_command = post_run_command
@@ -207,10 +220,10 @@ class SubmissionPipeline:
         return outputs
 
     def _remote_stdout_path(self, job_id: str) -> str:
-        return f"{self.remote_dir}/job_{job_id}.out"
+        return managed_stdout_path(self.remote_project_dir, job_id)
 
     def _remote_stderr_path(self, job_id: str) -> str:
-        return f"{self.remote_dir}/job_{job_id}.err"
+        return managed_stderr_path(self.remote_project_dir, job_id)
 
     def _announce_submit_only_details(self, job_id: str) -> None:
         self._announce("Submit-only mode: job submitted; skipping monitoring and log fetch.")
@@ -296,6 +309,8 @@ class SubmissionPipeline:
         data.update(
             {
                 "remote_dir": self.remote_dir,
+                "remote_project_dir": self.remote_project_dir,
+                "run_id": self.run_id,
                 "job_name": self.job_name,
                 "command": self.command,
                 "submit_only": self.submit_only,
@@ -305,6 +320,7 @@ class SubmissionPipeline:
                 "use_conda": self.use_conda,
                 "container": self.container,
                 "sync_remote_extra_policy": self.sync_remote_extra_policy,
+                "sync_excludes": self.sync_excludes,
                 "pre_sync_command": bool(self.pre_sync_command),
                 "pre_run_command": bool(self.pre_run_command),
                 "post_run_command": bool(self.post_run_command),
@@ -321,11 +337,13 @@ class SubmissionPipeline:
             "local_commit": self._local_git_commit(),
             "manifest_status": status,
             "remote_dir": self.remote_dir,
+            "remote_project_dir": self.remote_project_dir,
+            "run_id": self.run_id,
             "slurm_script_path": f"{self.remote_dir}/ulhpc_submit_job.sh",
             "stdout_path": self._remote_stdout_path(job_id) if job_id else "",
             "stderr_path": self._remote_stderr_path(job_id) if job_id else "",
             "submit_time": datetime.now().isoformat(timespec="seconds"),
-            "sync_excludes": self.config.sync_excludes,
+            "sync_excludes": self.sync_excludes,
         }
 
     def _write_manifest(self, status: str) -> None:
@@ -350,14 +368,14 @@ class SubmissionPipeline:
             self.progress("code sync: skipped (--no-sync)")
         elif sync:
             self.progress(f"command: {sync.sync_dry_run()}")
-            self.progress(f"excludes: {', '.join(self.config.sync_excludes) or '(none)'}")
+            self.progress(f"excludes: {', '.join(self.sync_excludes) or '(none)'}")
             self.progress(
-                f"estimated upload size: {CodeSync.format_upload_size(str(self.local_dir), self.config.sync_excludes)}"
+                f"estimated upload size: {CodeSync.format_upload_size(str(self.local_dir), self.sync_excludes)}"
             )
         self.progress("=== remote paths ===")
         self.progress(f"workdir: {self.remote_dir}")
-        self.progress("stdout: job_%j.out")
-        self.progress("stderr: job_%j.err")
+        self.progress(f"stdout: {self._remote_stdout_path('%j')}")
+        self.progress(f"stderr: {self._remote_stderr_path('%j')}")
         if self.data_mounts:
             self.progress("=== data staging ===")
             for mount in self.data_mounts:
@@ -386,7 +404,13 @@ class SubmissionPipeline:
                 f"Connected to {self.config.user}@{self.config.host}:{self.config.port}"
             )
             # Resolve ~ and relative paths to absolute remote path for SFTP.
-            self.remote_dir = self.ssh.expand_remote_path(self.remote_dir)
+            self.remote_project_dir = self.ssh.expand_remote_path(self.remote_project_dir)
+            self.remote_log_dir = managed_log_dir(self.remote_project_dir)
+            self.remote_dir = (
+                self.remote_project_dir
+                if self.no_sync
+                else run_workdir(self.remote_project_dir, self.run_id)
+            )
 
             # 1. Sync code
             sync = None
@@ -398,7 +422,7 @@ class SubmissionPipeline:
                     ssh=self.ssh,
                     local_dir=str(self.local_dir),
                     remote_dir=self.remote_dir,
-                    excludes=self.config.sync_excludes,
+                    excludes=self.sync_excludes,
                     progress=self.progress,
                     free_space_margin=self.config.sync_free_space_margin,
                     remote_extra_policy=self.sync_remote_extra_policy,
@@ -462,6 +486,8 @@ class SubmissionPipeline:
                 post_run_command=self.post_run_command,
                 on_failure_command=self.on_failure_command,
                 command_timeout=self.command_timeout,
+                stdout_path=self._remote_stdout_path("%j"),
+                stderr_path=self._remote_stderr_path("%j"),
             )
             script_path = builder.write()
             self._announce(f"Generated Slurm script: {script_path}")
@@ -471,6 +497,13 @@ class SubmissionPipeline:
                 return 0
 
             # 4. Submit job
+            rc, _, err = self.ssh.exec_command(
+                f"mkdir -p {shlex.quote(self.remote_log_dir)}"
+            )
+            if rc != 0:
+                raise StagingError(
+                    err.strip() or f"Failed to create remote log directory {self.remote_log_dir}"
+                )
             job_manager = JobManager(self.ssh, self.remote_dir)
             remote_script = job_manager.upload_script(script_path)
             self.job_id = job_manager.submit(remote_script)
@@ -503,10 +536,12 @@ class SubmissionPipeline:
             # 6. Fetch logs
             log_manager = LogManager(
                 ssh=self.ssh,
-                remote_dir=self.remote_dir,
+                remote_dir=self.remote_project_dir,
                 job_id=self.job_id,
                 run_logger=self.logger,
                 full_logs=self.full_logs,
+                stdout_path=self._remote_stdout_path(self.job_id),
+                stderr_path=self._remote_stderr_path(self.job_id),
             )
             self._announce("Fetching remote output...")
             stdout, stderr = log_manager.fetch()
@@ -520,6 +555,9 @@ class SubmissionPipeline:
                 self.progress(str(classified))
                 self._emit_json_result(classified.code, 1)
                 return 1
+
+            if log_manager.fetch_errors:
+                raise JobLogFetchError("; ".join(log_manager.fetch_errors))
 
             self._announce(f"Run complete. Log: {self.logger.log_file}")
             self._emit_json_result("completed", 0)
